@@ -64,8 +64,7 @@ export interface Confirmation {
 export const useChatStore = defineStore('chat', () => {
   const { t } = useAirlockI18n()
   const conversationId = ref<string | null>(null)
-  // Web conversations for this agent, newest first — the switcher list.
-  // Bridge/a2a threads are excluded server-side (ListConversationsByAgent).
+  // Interactive conversations for this agent, newest first.
   const conversations = ref<ConversationInfo[]>([])
   const messages = ref<AgentMessageInfo[]>([])
   const streamingText = ref('')
@@ -81,8 +80,7 @@ export const useChatStore = defineStore('chat', () => {
   const currentRunId = ref<string | null>(null)
   // The agent this store is bound to (its WS topic == this agent's UUID).
   // Every run/notification envelope is addressed by topicId+conversationId;
-  // events not matching this binding belong to a different agent (e.g. an
-  // A2A sibling's own run) and are rejected at the edge — no runId guessing.
+  // events not matching this binding are rejected without guessing run IDs.
   const boundAgentId = ref<string | null>(null)
   const sending = ref(false)
   const cancelling = ref(false)
@@ -133,6 +131,9 @@ export const useChatStore = defineStore('chat', () => {
   const pendingNotifications: AgentMessageInfo[] = []
 
   const unsubscribers: (() => void)[] = []
+  let eventRevision = 0
+  let reconciliation = 0
+  let needsSnapshot = false
 
   function tryFromJson<T>(schema: any, payload: unknown): T | null {
     if (!payload || typeof payload !== 'object') return null
@@ -159,18 +160,10 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Address gate: a run/notification envelope is for this store iff it
-  // is on this agent's topic and this conversation. Subagent (A2A
-  // sub-run) envelopes carry the parent topic+conversation but a foreign
-  // run; until a sub-run UI exists they're dropped here (their data
-  // still reaches run_js via the tool return). A foreign agent's events
-  // (e.g. an A2A sibling reporting its own run on its own topic) have a
-  // different topicId and never reach the handler. This replaces the
-  // whole isCurrentRun/cancelledRunIds cross-scope guessing layer.
-  // Forward-compat: when envelope.scope lands (user/tenant/system
-  // events), also require scope === 'agent' here.
+  // is on this agent's topic and this conversation.
   function onRunMessage(type: string, handler: (payload: unknown) => void) {
     return ws.onMessage(type, (payload, env) => {
-      if (!env || env.subagent) return
+      if (!env) return
       if (!boundAgentId.value || env.topicId !== boundAgentId.value) return
       if (conversationId.value) {
         // Known conversation: reject other conversations on this agent.
@@ -184,7 +177,11 @@ export const useChatStore = defineStore('chat', () => {
       } else {
         return
       }
+      eventRevision++
       handler(payload)
+      if (needsSnapshot && (type === 'run.complete' || type === 'run.error')) {
+        void reconcileThread()
+      }
     })
   }
 
@@ -261,9 +258,7 @@ export const useChatStore = defineStore('chat', () => {
           return
         }
         // No live entry: the call was already finalized into messages[]
-        // (e.g. a resume — the promptAgent call bubble was committed and
-        // activeToolCalls cleared on run.started, then the sibling's
-        // reply arrives as this result). Patch the finalized bubble so
+        // on a resume). Patch the finalized bubble so
         // the output renders live, matching what enrichMessages folds in
         // on refresh.
         for (let i = messages.value.length - 1; i >= 0; i--) {
@@ -392,8 +387,8 @@ export const useChatStore = defineStore('chat', () => {
       // only — not run/conversation — so handled directly, not via the
       // address-gated onRunMessage.
       ws.onMessage('resync', (_payload, env) => {
-        if (!boundAgentId.value || env?.topicId !== boundAgentId.value) return
-        void reloadCurrentThread()
+        if (!boundAgentId.value || (env?.topicId && env.topicId !== boundAgentId.value)) return
+        void reconcileThread()
       }),
       // On every (re)connect, reconcile the confirmation gate with
       // authoritative DB state. A dropped confirmation_required frame on a
@@ -403,9 +398,48 @@ export const useChatStore = defineStore('chat', () => {
       // reappears instead of the user silently losing it — and then bricking
       // the run by typing a fresh message over the orphaned tool-call.
       ws.onMessage('_connected', () => {
-        void syncPendingConfirmationFromServer()
+        if (needsSnapshot) void reconcileThread()
+        else void syncPendingConfirmationFromServer()
       }),
     )
+  }
+
+  // A resync snapshot replaces transient state only while its binding and event
+  // revision still match. A later event or prompt wins over an older HTTP reply.
+  async function reconcileThread() {
+    const request = ++reconciliation
+    const agentId = boundAgentId.value
+    const convId = conversationId.value
+    if (!agentId || !convId) return
+    needsSnapshot = true
+    while (request === reconciliation && boundAgentId.value === agentId && conversationId.value === convId) {
+      const revision = eventRevision
+      try {
+        const { data } = await api.get(`/api/v1/conversations/${convId}`)
+        if (request !== reconciliation || boundAgentId.value !== agentId || conversationId.value !== convId) return
+        if (revision !== eventRevision) {
+          await new Promise(resolve => setTimeout(resolve, 100))
+          continue
+        }
+        const snapshot = fromJson(GetConversationResponseSchema, data)
+        resetTransient()
+        messages.value = enrichMessages(snapshot.messages)
+        hasOlder.value = snapshot.hasOlderMessages
+        hasNewer.value = false
+        newMessagesPending.value = false
+        needsSnapshot = !!snapshot.inFlightRunId
+        if (snapshot.pendingConfirmation) restorePendingConfirmation(snapshot.pendingConfirmation, messages.value)
+        if (snapshot.inFlightRunId) {
+          currentRunId.value = snapshot.inFlightRunId
+          sending.value = true
+        }
+        return
+      } catch {
+        // Preserve the current view during a transport failure. Reconnect or
+        // the next terminal event retries the authoritative fetch.
+        return
+      }
+    }
   }
 
   // Re-fetch the open thread's pending confirmation from the DB and restore
@@ -415,13 +449,30 @@ export const useChatStore = defineStore('chat', () => {
   async function syncPendingConfirmationFromServer() {
     const convId = conversationId.value
     if (!convId) return
-    // A live gate is already in hand — don't clobber its fresh anchor/runId.
-    if (pendingConfirmation.value) return
+    const agentId = boundAgentId.value
+    const gate = pendingConfirmation.value
+    const runId = currentRunId.value
+    const revision = eventRevision
+    const request = reconciliation
     try {
       const { data } = await api.get(`/api/v1/conversations/${convId}`)
       const resp = fromJson(GetConversationResponseSchema, data)
+      // A response for an earlier binding must not overwrite a new turn or gate.
+      if (conversationId.value !== convId || boundAgentId.value !== agentId ||
+          currentRunId.value !== runId || pendingConfirmation.value !== gate ||
+          eventRevision !== revision || reconciliation !== request) return
       if (resp.pendingConfirmation) {
         restorePendingConfirmation(resp.pendingConfirmation, messages.value)
+      } else if (!resp.inFlightRunId) {
+        resetTransient()
+        messages.value = enrichMessages(resp.messages)
+        hasOlder.value = resp.hasOlderMessages
+        hasNewer.value = false
+        newMessagesPending.value = false
+      } else {
+        pendingConfirmation.value = null
+        currentRunId.value = resp.inFlightRunId
+        sending.value = true
       }
     } catch {
       // Leave the gate as-is.
@@ -535,7 +586,7 @@ export const useChatStore = defineStore('chat', () => {
         kind: 'tool',
         toolCallId: b.toolCallId,
         toolName: tc?.toolName || 'tool',
-        label: toolLabel(tc?.toolName || 'tool', rawArgs, t),
+        label: toolLabel(tc?.toolName || 'tool', t),
         input: formatToolArgs(rawArgs),
         description: toolDescription(rawArgs),
         output: tc?.output || '',
@@ -594,11 +645,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // Restore confirmation state from a server-provided pending confirmation
-  // (conversation load after a refresh). A delegated A2A confirmation
-  // (permission/patterns/code populated) carries its own detail; a direct
-  // run_js confirmation describes the call via toolName/input.
+  // on conversation load after a refresh.
   function restorePendingConfirmation(
-    pc: { runId?: string; toolCallId: string; toolName: string; input: string; permission?: string; patterns?: string[]; code?: string; description?: string },
+    pc: { runId?: string; toolCallId: string; toolName: string; input: string; description?: string },
     msgs: AgentMessageInfo[],
   ) {
     const input = formatToolArgs((() => { try { return JSON.parse(pc.input) } catch { return pc.input } })())
@@ -626,13 +675,11 @@ export const useChatStore = defineStore('chat', () => {
       // rebuilt without a live confirmation_required event is still
       // approvable instead of 400ing for a missing resume_run_id.
       runId: pc.runId || '',
-      permission: pc.permission || pc.toolName,
-      patterns: pc.patterns ? [...pc.patterns] : [],
-      code: pc.code || input,
+      permission: pc.toolName,
+      patterns: [],
+      code: input,
       // Keep toolCallId only when an assistant message anchors it (drives
-      // the inline box). A delegated A2A confirmation's suspending turn is
-      // not persisted to the thread, so there's no anchor — blank it and
-      // the standalone confirmation card renders instead of nothing.
+      // the inline box). Otherwise show the standalone confirmation card.
       toolCallId: anchored ? pc.toolCallId : '',
       description: pc.description || '',
     }
@@ -693,7 +740,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // Refresh the switcher list (web threads only — bridge/a2a are excluded
+  // Refresh the switcher list (interactive threads are selected
   // server-side). Newest first so [0] is the natural default.
   async function refreshConversations(agentId: string): Promise<ConversationInfo[]> {
     const { data } = await api.get(`/api/v1/agents/${agentId}/conversations`)
@@ -710,6 +757,8 @@ export const useChatStore = defineStore('chat', () => {
   // so "New chat" and an agent's Chat button always start fresh. Past
   // threads are reached through the sidebar.
   async function loadConversation(agentId: string, convId?: string) {
+    reconciliation++
+    needsSnapshot = false
     boundAgentId.value = agentId
     const web = await refreshConversations(agentId)
     if (convId && web.some(c => c.id === convId)) {
@@ -800,6 +849,9 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function sendMessage(agentId: string, text: string, approved?: boolean, filePaths?: string[]) {
+    reconciliation++
+    eventRevision++
+    needsSnapshot = false
     boundAgentId.value = agentId
     const isResume = approved !== undefined
     const confirmationToRestore = isResume ? pendingConfirmation.value : null

@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service/execution"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -114,50 +115,7 @@ func (s *Scheduler) materializeDue(ctx context.Context) (int, error) {
 }
 
 func (s *Scheduler) materializeDueLimit(ctx context.Context, limit int32) (int, error) {
-	tx, err := s.db.Pool().Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	q := dbq.New(tx)
-	due, err := q.SelectDueAgentJobCrons(ctx, limit)
-	if err != nil {
-		return 0, err
-	}
-	for _, declaration := range due {
-		occurrence := declaration.NextFireAt.Time
-		next, err := nextFire(declaration.Schedule, occurrence)
-		if err != nil {
-			return 0, fmt.Errorf("parse cron %s: %w", declaration.Slug, err)
-		}
-		if _, err := q.InsertAgentJobFromCron(ctx, dbq.InsertAgentJobFromCronParams{
-			JobID:                   toPgUUID(uuid.New()),
-			ScheduledAt:             pgTimestamp(occurrence),
-			InitiatorKind:           "system",
-			InitiatorUserID:         pgtype.UUID{},
-			InitiatorConversationID: pgtype.UUID{},
-			InitiatorAccess:         "public",
-			CronID:                  declaration.ID,
-		}); err != nil {
-			return 0, fmt.Errorf("insert job for cron %s: %w", declaration.Slug, err)
-		}
-		advanced, err := q.AdvanceAgentJobCron(ctx, dbq.AdvanceAgentJobCronParams{
-			NextFireAt:      pgTimestamp(next),
-			OccurrenceAt:    pgTimestamp(occurrence),
-			CronID:          declaration.ID,
-			PriorNextFireAt: declaration.NextFireAt,
-		})
-		if err != nil {
-			return 0, fmt.Errorf("advance cron %s: %w", declaration.Slug, err)
-		}
-		if advanced != 1 {
-			return 0, fmt.Errorf("advance cron %s: next occurrence changed while locked", declaration.Slug)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return len(due), nil
+	return execution.New(s.db).MaterializeDueCrons(ctx, limit)
 }
 
 // ReconcileAgent replaces one runtime generation's cron declarations while

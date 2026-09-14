@@ -2,6 +2,7 @@ package trigger
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
@@ -29,7 +30,7 @@ func (m *BridgeManager) handleManagerBotCreated(ctx context.Context, br dbq.Brid
 			zap.String("bridge", br.Name))
 		return nil
 	}
-	sysConvID, err := m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username)
+	sysConvID, sourceRunID, err := m.managedBotIngest(ctx, br.BotTokenRef, evt.BotID, evt.Username)
 	if err != nil {
 		return err
 	}
@@ -38,16 +39,17 @@ func (m *BridgeManager) handleManagerBotCreated(ctx context.Context, br dbq.Brid
 	// resume that conversation so the agent announces the ready bot in-character
 	// and hands over the open link — same mechanism as a build/upgrade
 	// completion. Its reply streams back through the system bridge.
-	if sysConvID != "" && m.sysagent != nil {
-		if cid, perr := uuid.Parse(sysConvID); perr == nil {
-			if nerr := m.sysagent.NotifyBotCreated(ctx, cid, evt.Username); nerr != nil {
-				m.logger.Warn("notify bot created (sysagent resume) failed",
-					zap.String("bridge", br.Name),
-					zap.String("new_bot", evt.Username),
-					zap.Error(nerr))
-			}
-			return nil
+	if sysConvID != uuid.Nil {
+		if m.sysagent == nil {
+			return errors.New("sysagent runtime not attached")
 		}
+		if nerr := m.sysagent.NotifyBotCreated(ctx, sysConvID, sourceRunID, evt.Username); nerr != nil {
+			m.logger.Warn("notify bot created (sysagent resume) failed",
+				zap.String("bridge", br.Name),
+				zap.String("new_bot", evt.Username),
+				zap.Error(nerr))
+		}
+		return nil
 	}
 
 	// Web-UI / non-sysagent path: no conversation to resume, so post the open

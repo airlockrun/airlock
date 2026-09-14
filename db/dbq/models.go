@@ -46,7 +46,6 @@ type Agent struct {
 	McpEnabled               bool               `json:"mcp_enabled"`
 	AllowPublicMcp           bool               `json:"allow_public_mcp"`
 	AllowPublicRoutes        bool               `json:"allow_public_routes"`
-	ToolsHash                []byte             `json:"tools_hash"`
 	Emoji                    string             `json:"emoji"`
 	AllowOauthMcpPrompt      bool               `json:"allow_oauth_mcp_prompt"`
 	AllowPublicMcpPrompt     bool               `json:"allow_public_mcp_prompt"`
@@ -96,6 +95,7 @@ type AgentBuild struct {
 	JobManifestExtractedAt    pgtype.Timestamptz `json:"job_manifest_extracted_at"`
 	JobManifestDigest         pgtype.Text        `json:"job_manifest_digest"`
 	CancelRequestedAt         pgtype.Timestamptz `json:"cancel_requested_at"`
+	ChatOriginID              pgtype.UUID        `json:"chat_origin_id"`
 }
 
 type AgentBuildJobHandler struct {
@@ -199,6 +199,7 @@ type AgentJob struct {
 	StateVersion            int64              `json:"state_version"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	OriginID                pgtype.UUID        `json:"origin_id"`
 }
 
 type AgentJobAttempt struct {
@@ -290,18 +291,20 @@ type AgentMcpServer struct {
 }
 
 type AgentMessage struct {
-	ID             pgtype.UUID        `json:"id"`
-	Seq            int64              `json:"seq"`
-	ConversationID pgtype.UUID        `json:"conversation_id"`
-	RunID          pgtype.UUID        `json:"run_id"`
-	Role           string             `json:"role"`
-	Source         string             `json:"source"`
-	Content        string             `json:"content"`
-	Parts          []byte             `json:"parts"`
-	FileKeys       []string           `json:"file_keys"`
-	CostEstimate   pgtype.Numeric     `json:"cost_estimate"`
-	Ephemeral      bool               `json:"ephemeral"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID               pgtype.UUID        `json:"id"`
+	Seq              int64              `json:"seq"`
+	ConversationID   pgtype.UUID        `json:"conversation_id"`
+	RunID            pgtype.UUID        `json:"run_id"`
+	Role             string             `json:"role"`
+	Source           string             `json:"source"`
+	Content          string             `json:"content"`
+	Parts            []byte             `json:"parts"`
+	FileKeys         []string           `json:"file_keys"`
+	CostEstimate     pgtype.Numeric     `json:"cost_estimate"`
+	Ephemeral        bool               `json:"ephemeral"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ContextTokensIn  pgtype.Int8        `json:"context_tokens_in"`
+	ContextTokensOut pgtype.Int8        `json:"context_tokens_out"`
 }
 
 type AgentModelSlot struct {
@@ -343,12 +346,90 @@ type AgentRoute struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
-type AgentSibling struct {
-	ParentAgentID        pgtype.UUID        `json:"parent_agent_id"`
-	SiblingAgentID       pgtype.UUID        `json:"sibling_agent_id"`
-	MaxAccess            string             `json:"max_access"`
-	AuthorizingGranteeID pgtype.UUID        `json:"authorizing_grantee_id"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+type AgentRuntimeManifest struct {
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	TokenVersion int64              `json:"token_version"`
+	Manifest     []byte             `json:"manifest"`
+	SyncedAt     pgtype.Timestamptz `json:"synced_at"`
+}
+
+type AgentTaskCall struct {
+	ID                     pgtype.UUID        `json:"id"`
+	SessionID              pgtype.UUID        `json:"session_id"`
+	AgentID                pgtype.UUID        `json:"agent_id"`
+	Definition             string             `json:"definition"`
+	ContractHash           string             `json:"contract_hash"`
+	DefinitionSnapshot     []byte             `json:"definition_snapshot"`
+	SubagentSnapshots      []byte             `json:"subagent_snapshots"`
+	RequestID              string             `json:"request_id"`
+	RequestPayload         []byte             `json:"request_payload"`
+	Message                string             `json:"message"`
+	RootID                 pgtype.UUID        `json:"root_id"`
+	ParentID               pgtype.UUID        `json:"parent_id"`
+	ParentToolCallID       pgtype.Text        `json:"parent_tool_call_id"`
+	Status                 string             `json:"status"`
+	Reply                  []byte             `json:"reply"`
+	Error                  string             `json:"error"`
+	Steps                  int64              `json:"steps"`
+	Tokens                 int64              `json:"tokens"`
+	StepLimit              int64              `json:"step_limit"`
+	TokenLimit             int64              `json:"token_limit"`
+	Deadline               pgtype.Timestamptz `json:"deadline"`
+	Attempts               int32              `json:"attempts"`
+	MaxAttempts            int32              `json:"max_attempts"`
+	MaxConcurrency         int32              `json:"max_concurrency"`
+	MaxSubagentCalls       int32              `json:"max_subagent_calls"`
+	MaxConcurrentSubagents int32              `json:"max_concurrent_subagents"`
+	OwnerToken             pgtype.UUID        `json:"owner_token"`
+	RuntimeGeneration      int64              `json:"runtime_generation"`
+	Checkpoint             []byte             `json:"checkpoint"`
+	CheckpointRevision     int64              `json:"checkpoint_revision"`
+	CheckpointUpdatedAt    pgtype.Timestamptz `json:"checkpoint_updated_at"`
+	CancelRequestedAt      pgtype.Timestamptz `json:"cancel_requested_at"`
+	RecoveryNotice         string             `json:"recovery_notice"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	EnqueuedAt             pgtype.Timestamptz `json:"enqueued_at"`
+	StartedAt              pgtype.Timestamptz `json:"started_at"`
+	CompletedAt            pgtype.Timestamptz `json:"completed_at"`
+}
+
+type AgentTaskClaim struct {
+	OwnerToken        pgtype.UUID        `json:"owner_token"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	RuntimeGeneration int64              `json:"runtime_generation"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTaskSession struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	Definition   string             `json:"definition"`
+	ContractHash string             `json:"contract_hash"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTaskUsage struct {
+	RequestID  pgtype.UUID        `json:"request_id"`
+	RunID      pgtype.UUID        `json:"run_id"`
+	OwnerToken pgtype.UUID        `json:"owner_token"`
+	Tokens     int64              `json:"tokens"`
+	Reported   bool               `json:"reported"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTaskWait struct {
+	RunID      pgtype.UUID        `json:"run_id"`
+	ToolCallID string             `json:"tool_call_id"`
+	Request    []byte             `json:"request"`
+	Deadline   pgtype.Timestamptz `json:"deadline"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTaskWaitDependency struct {
+	RunID        pgtype.UUID `json:"run_id"`
+	DependencyID pgtype.UUID `json:"dependency_id"`
 }
 
 type AgentTool struct {
@@ -387,6 +468,14 @@ type AgentWebhook struct {
 	LastReceivedAt pgtype.Timestamptz `json:"last_received_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AsyncChatOrigin struct {
+	ID          pgtype.UUID `json:"id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	SourceRunID pgtype.UUID `json:"source_run_id"`
+	SystemRunID pgtype.UUID `json:"system_run_id"`
 }
 
 type AttachmentUrlCache struct {
@@ -706,6 +795,14 @@ type ConnectorTransfer struct {
 	CleanupDestination         bool               `json:"cleanup_destination"`
 }
 
+type ConversationRunLease struct {
+	ConversationID  pgtype.UUID        `json:"conversation_id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	OwnerToken      pgtype.UUID        `json:"owner_token"`
+	LeaseUntil      pgtype.Timestamptz `json:"lease_until"`
+	CancelRequested bool               `json:"cancel_requested"`
+}
+
 type DeviceLoginSession struct {
 	ID                  pgtype.UUID        `json:"id"`
 	DeviceCodeHash      string             `json:"device_code_hash"`
@@ -723,6 +820,42 @@ type DeviceLoginSession struct {
 	LastPolledAt        pgtype.Timestamptz `json:"last_polled_at"`
 	PollIntervalSeconds int32              `json:"poll_interval_seconds"`
 	ApprovedAuthEpoch   pgtype.Int8        `json:"approved_auth_epoch"`
+}
+
+type ExecutionInvocation struct {
+	TokenHash         []byte             `json:"token_hash"`
+	RunID             pgtype.UUID        `json:"run_id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	RuntimeGeneration int64              `json:"runtime_generation"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	ClosedAt          pgtype.Timestamptz `json:"closed_at"`
+	RevokedAt         pgtype.Timestamptz `json:"revoked_at"`
+	OwnerToken        pgtype.UUID        `json:"owner_token"`
+}
+
+type ExecutionOrigin struct {
+	ID                  pgtype.UUID        `json:"id"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	Ingress             string             `json:"ingress"`
+	Actor               string             `json:"actor"`
+	CredentialProfile   string             `json:"credential_profile"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	SessionID           pgtype.UUID        `json:"session_id"`
+	AuthEpoch           pgtype.Int8        `json:"auth_epoch"`
+	CredentialExpiresAt pgtype.Timestamptz `json:"credential_expires_at"`
+	AuthenticatedAt     pgtype.Timestamptz `json:"authenticated_at"`
+	Audience            pgtype.Text        `json:"audience"`
+	ClientID            pgtype.Text        `json:"client_id"`
+	Scope               pgtype.Text        `json:"scope"`
+	CredentialAgentID   pgtype.UUID        `json:"credential_agent_id"`
+	RuntimeGeneration   pgtype.Int8        `json:"runtime_generation"`
+	BridgeID            pgtype.UUID        `json:"bridge_id"`
+	PlatformIdentityID  pgtype.UUID        `json:"platform_identity_id"`
+	SenderID            pgtype.Text        `json:"sender_id"`
+	ChatID              pgtype.Text        `json:"chat_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 type GitCredential struct {
@@ -890,6 +1023,7 @@ type ManagedBotSession struct {
 	ExpiresAt            pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	SystemConversationID pgtype.UUID        `json:"system_conversation_id"`
+	ChatOriginID         pgtype.UUID        `json:"chat_origin_id"`
 }
 
 type McpActiveRequest struct {
@@ -899,6 +1033,7 @@ type McpActiveRequest struct {
 	RunID             pgtype.UUID        `json:"run_id"`
 	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	OwnerToken        pgtype.UUID        `json:"owner_token"`
 }
 
 type Migration004ResourceGrantBackup struct {
@@ -1044,6 +1179,21 @@ type ProviderModel struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RealtimeEvent struct {
+	Seq          int64              `json:"seq"`
+	TopicID      pgtype.UUID        `json:"topic_id"`
+	Envelope     []byte             `json:"envelope"`
+	BytePosition int64              `json:"byte_position"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type RealtimeEventHead struct {
+	Singleton    bool  `json:"singleton"`
+	Seq          int64 `json:"seq"`
+	BytePosition int64 `json:"byte_position"`
+	DroppedSeq   int64 `json:"dropped_seq"`
+}
+
 type RelayCode struct {
 	CodeHash     []byte             `json:"code_hash"`
 	NonceHash    []byte             `json:"nonce_hash"`
@@ -1082,6 +1232,10 @@ type ResourceOwnershipTransfer struct {
 	CreatedAt                pgtype.Timestamptz `json:"created_at"`
 }
 
+type RetiredAppRun struct {
+	ID pgtype.UUID `json:"id"`
+}
+
 type Run struct {
 	ID                   pgtype.UUID        `json:"id"`
 	AgentID              pgtype.UUID        `json:"agent_id"`
@@ -1111,6 +1265,19 @@ type Run struct {
 	CallerUserID         pgtype.UUID        `json:"caller_user_id"`
 	CallerConversationID pgtype.UUID        `json:"caller_conversation_id"`
 	CallerAccess         string             `json:"caller_access"`
+	RuntimeOwnerToken    pgtype.UUID        `json:"runtime_owner_token"`
+	OriginID             pgtype.UUID        `json:"origin_id"`
+	ExecutionKind        string             `json:"execution_kind"`
+	ResumeRunID          pgtype.UUID        `json:"resume_run_id"`
+}
+
+type RuntimeAttachedFile struct {
+	RunID pgtype.UUID `json:"run_id"`
+	Path  string      `json:"path"`
+}
+
+type RuntimeCheckpointInvalidation struct {
+	RunID pgtype.UUID `json:"run_id"`
 }
 
 type SystemAudit struct {
@@ -1168,6 +1335,11 @@ type SystemRun struct {
 	LlmCostEstimate float64            `json:"llm_cost_estimate"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+}
+
+type SystemRunOrigin struct {
+	RunID      pgtype.UUID `json:"run_id"`
+	Provenance []byte      `json:"provenance"`
 }
 
 type SystemSetting struct {

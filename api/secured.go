@@ -26,7 +26,11 @@ var securedAccountAllowlist = map[string]bool{
 func securedAccountGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.ClaimsFromContext(r.Context())
-		if claims == nil || !claims.MustChangePassword {
+		if claims == nil {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if auth.RequireSecuredAccount(claims) == nil {
 			next.ServeHTTP(w, r)
 			return
 		}

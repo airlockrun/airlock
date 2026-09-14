@@ -134,24 +134,31 @@ func (b *BuildService) SetEventPublisher(ep EventPublisher) {
 }
 
 // SetUpgradeNotifier sets the notifier called after an upgrade
-// initiated from an agent's web/bridge/A2A conversation finishes.
+// initiated from an agent's web or bridge conversation finishes.
 func (b *BuildService) SetUpgradeNotifier(n PostUpgradeNotifier) {
+	if n == nil {
+		panic("builder: upgrade notifier is required")
+	}
 	b.upgradeNotifier = n
 }
 
 // SetUpgradeSystemNotifier sets the notifier called after an upgrade
 // initiated from a system-agent conversation finishes. Mirrors
-// SetUpgradeNotifier; the builder routes by UpgradeInput's
-// SystemConversationID vs ConversationID (mutually exclusive — see
-// notifyUpgradeOutcome).
+// SetUpgradeNotifier; the persisted chat origin selects the notification target.
 func (b *BuildService) SetUpgradeSystemNotifier(n PostUpgradeSystemNotifier) {
+	if n == nil {
+		panic("builder: system upgrade notifier is required")
+	}
 	b.upgradeSystemNotifier = n
 }
 
 // SetBuildSystemNotifier sets the notifier called after an INITIAL build
 // kicked off from a system-agent create_agent tool finishes. Routed by
-// BuildInput.SystemConversationID (system-agent create path only).
+// BuildInput.ChatOriginID (system-agent create path only).
 func (b *BuildService) SetBuildSystemNotifier(n PostBuildSystemNotifier) {
+	if n == nil {
+		panic("builder: system build notifier is required")
+	}
 	b.buildSystemNotifier = n
 }
 
@@ -167,17 +174,19 @@ func (b *BuildService) SetJobWake(wake func()) {
 // system-agent conversation (when a create_agent tool triggered it). No-op
 // for the web create path, which carries no conversation id and surfaces
 // status via the build view.
-func (b *BuildService) notifyBuildOutcome(ctx context.Context, agentID uuid.UUID, systemConversationID, status, message string) {
-	if systemConversationID == "" || b.buildSystemNotifier == nil {
+func (b *BuildService) notifyBuildOutcome(ctx context.Context, agentID uuid.UUID, originID pgtype.UUID, status, message string) {
+	if !originID.Valid {
 		return
 	}
-	tid, err := uuid.Parse(systemConversationID)
-	if err != nil {
-		b.logger.Error("invalid system conversation id on build outcome",
-			zap.String("conversation_id", systemConversationID), zap.Error(err))
+	origin, err := dbq.New(b.db.Pool()).GetAsyncChatOrigin(ctx, originID)
+	if err != nil || !origin.SystemRunID.Valid || !origin.AgentID.Valid || uuid.UUID(origin.AgentID.Bytes) != agentID {
+		b.logger.Error("invalid build notification origin", zap.Error(err))
 		return
 	}
-	if nerr := b.buildSystemNotifier.NotifyBuildComplete(ctx, agentID, tid, status, message); nerr != nil {
+	if b.buildSystemNotifier == nil {
+		panic("builder: system build notifier is required")
+	}
+	if nerr := b.buildSystemNotifier.NotifyBuildComplete(ctx, agentID, uuid.UUID(origin.SystemConversationID.Bytes), uuid.UUID(origin.SystemRunID.Bytes), status, message); nerr != nil {
 		b.logger.Error("post-build system-conversation notification failed", zap.Error(nerr))
 	}
 }
@@ -256,6 +265,7 @@ func (b *BuildService) CancelBuildAndWait(agentID string, timeout time.Duration)
 
 // BuildInput describes what to build.
 type BuildInput struct {
+	ChatOriginID     pgtype.UUID
 	AgentID          string
 	Name             string
 	Slug             string
@@ -282,12 +292,6 @@ type BuildInput struct {
 	GitCredentialID  pgtype.UUID
 	GitDefaultBranch string // defaults to "main" when empty
 	GitMode          string
-
-	// SystemConversationID, when set, is the system-agent conversation that
-	// triggered this build via create_agent. On completion the build outcome
-	// is posted back there + the system agent resumes. Empty for the web
-	// create path (no conversation).
-	SystemConversationID string
 }
 
 // Build runs the initial-build pipeline: scaffold → Sol codegen (if
@@ -394,6 +398,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) (err error) {
 	}
 
 	plan := BuildPlan{
+		ChatOriginID:    input.ChatOriginID,
 		Agent:           agent,
 		Kind:            BuildKindBuild,
 		Instruction:     input.Instructions,
@@ -431,7 +436,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) (err error) {
 		})
 		// Cancellation already surfaced via the build view toast; don't post.
 		if !errors.Is(err, context.Canceled) {
-			b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.SystemConversationID, "error", errMsg)
+			b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.ChatOriginID, "error", errMsg)
 		}
 		return err
 	}
@@ -440,7 +445,7 @@ func (b *BuildService) Build(_ context.Context, input BuildInput) (err error) {
 	if msg == "" {
 		msg = fmt.Sprintf("Agent %q is built and active.", agent.Name)
 	}
-	b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.SystemConversationID, "success", msg)
+	b.notifyBuildOutcome(context.Background(), uuid.UUID(agent.ID.Bytes), input.ChatOriginID, "success", msg)
 	return nil
 }
 

@@ -39,7 +39,7 @@ func HashIntegrationToken(token string) []byte {
 // BearerToken extracts a strict Authorization bearer token.
 func BearerToken(header string) (string, error) {
 	token, ok := strings.CutPrefix(header, "Bearer ")
-	if !ok || token == "" || strings.ContainsAny(token, " \t\r\n") {
+	if !ok || token == "" || strings.ContainsAny(token, ", \t\r\n") {
 		return "", errors.New("invalid authorization header")
 	}
 	return token, nil

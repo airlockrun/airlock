@@ -14,13 +14,12 @@ import (
 	"github.com/airlockrun/airlock"
 )
 
-// Default toolserver/runtime images. Pinned to airlock.Version so every airlock
-// release references the matched pair built+published by the same release tag —
-// drift becomes impossible in prod. Self-host operators can still override via
-// AGENT_BUILDER_IMAGE / AGENT_BASE_IMAGE if they need a custom build.
+// Default toolserver/runtime images share airlock.Version. Operators can select
+// custom builds with AGENT_BUILDER_IMAGE, AGENT_BASE_IMAGE, or JS_EXECUTOR_IMAGE.
 const (
 	DefaultAgentBuilderImage     = "ghcr.io/airlockrun/airlock-agent-builder:v" + airlock.Version
 	DefaultAgentBaseImage        = "ghcr.io/airlockrun/airlock-agent-base:v" + airlock.Version
+	DefaultJSExecutorImage       = "ghcr.io/airlockrun/airlock-js-executor:v" + airlock.Version
 	defaultAgentHTTPPrivateCIDRs = ""
 	defaultTrustedProxyPeers     = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 )
@@ -44,9 +43,13 @@ const (
 
 type Config struct {
 	// --- Core ---
-	DatabaseURL string // Airlock's own Postgres connection
-	JWTSecret   string
-	ServerAddr  string
+	DatabaseURL                 string // Airlock's own Postgres connection
+	JWTSecret                   string
+	ServerAddr                  string
+	AgentTaskGlobalConcurrency  int
+	AgentTaskLocalConcurrency   int
+	AgentTaskDefaultWaitSeconds int
+	AgentTaskMaxWaitSeconds     int
 
 	// --- S3 / Object Storage ---
 	// Two audiences: Airlock process and public internet. Agents never hit
@@ -106,6 +109,7 @@ type Config struct {
 	// --- Containers ---
 	ContainerRuntime string // "docker"
 	ContainerImage   string // toolserver image name
+	JSExecutorImage  string // isolated JavaScript supervisor image
 
 	// InstanceID namespaces every Docker resource this airlock owns —
 	// agent/builder container names, agent image labels, and build-cache
@@ -209,9 +213,13 @@ func (c *Config) OIDCEnabled() bool {
 func Load() *Config {
 	c := &Config{
 		// Core
-		DatabaseURL: requireEnv("DATABASE_URL"),
-		JWTSecret:   requireEnv("JWT_SECRET"),
-		ServerAddr:  envOr("SERVER_ADDR", ":8080"),
+		DatabaseURL:                 requireEnv("DATABASE_URL"),
+		JWTSecret:                   requireEnv("JWT_SECRET"),
+		ServerAddr:                  envOr("SERVER_ADDR", ":8080"),
+		AgentTaskGlobalConcurrency:  envIntOr("AGENT_TASK_GLOBAL_CONCURRENCY", 32),
+		AgentTaskLocalConcurrency:   envIntOr("AGENT_TASK_LOCAL_CONCURRENCY", 4),
+		AgentTaskDefaultWaitSeconds: envIntOr("AGENT_TASK_DEFAULT_WAIT_SECONDS", 30),
+		AgentTaskMaxWaitSeconds:     envIntOr("AGENT_TASK_MAX_WAIT_SECONDS", 300),
 
 		// S3
 		S3URL:       requireEnv("S3_URL"),
@@ -253,6 +261,7 @@ func Load() *Config {
 		// Containers
 		ContainerRuntime:      envOr("CONTAINER_RUNTIME", "docker"),
 		ContainerImage:        envOr("CONTAINER_IMAGE", "airlock-toolserver"),
+		JSExecutorImage:       envOr("JS_EXECUTOR_IMAGE", DefaultJSExecutorImage),
 		InstanceID:            requireEnv("AIRLOCK_INSTANCE_ID"),
 		AgentRuntime:          resolveAgentRuntime(),
 		AgentMemoryLimitBytes: parseSizeBytes(os.Getenv("AGENT_MEMORY_LIMIT")),
@@ -294,6 +303,9 @@ func Load() *Config {
 		OIDCRedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
 	}
 	validateDeployment(c)
+	if c.AgentTaskGlobalConcurrency <= 0 || c.AgentTaskLocalConcurrency <= 0 || c.AgentTaskDefaultWaitSeconds <= 0 || c.AgentTaskMaxWaitSeconds < c.AgentTaskDefaultWaitSeconds || c.AgentTaskMaxWaitSeconds > 86400 {
+		panic("agent task concurrency must be positive; wait durations must satisfy 0 < default <= max <= 86400 seconds")
+	}
 	c.AgentScheme, c.AgentPort = agentSchemePort(c.PublicURL)
 	return c
 }

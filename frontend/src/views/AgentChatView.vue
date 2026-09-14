@@ -443,7 +443,7 @@ const streamingRender = computed(() =>
     return {
       kind: 'tool' as const,
       tc,
-      label: tc ? toolLabel(tc.toolName, tc.input, t) : 'tool',
+      label: tc ? toolLabel(tc.toolName, t) : 'tool',
     }
   }),
 )
@@ -554,7 +554,7 @@ function formatTokens(n: number): string {
             class="msg-response"
           >
             <ToolBadge
-              :label="toolLabel((msg as any).toolName || 'tool', undefined, t)"
+              :label="toolLabel((msg as any).toolName || 'tool', t)"
               :tool-name="(msg as any).toolName"
               :input="(msg as any).toolInput"
               :output="msg.content"

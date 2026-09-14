@@ -207,6 +207,7 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		}
 	}
 	build, err := q.CreateAgentBuild(ctx, dbq.CreateAgentBuildParams{
+		ChatOriginID:     plan.ChatOriginID,
 		AgentID:          agent.ID,
 		Type:             string(plan.Kind),
 		Instructions:     buildInstructions,
@@ -534,6 +535,32 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 	}
 	b.logger.Info("image built", zap.String("image", imageTag))
 
+	// This read-only preflight avoids connector and migration work for an
+	// incompatible candidate. Persistence and runtime sync recheck the contract.
+	logLine("Checking candidate job contracts against Airlock history...")
+	manifestCtx, cancelManifest := context.WithTimeout(ctx, 30*time.Second)
+	manifestBytes, err := b.containers.InspectManifest(manifestCtx, imageTag)
+	cancelManifest()
+	if err != nil {
+		failInfra(fmt.Errorf("inspect candidate manifest: %w", err), commitHash, imageTag)
+		return "", fmt.Errorf("inspect candidate manifest: %w", err)
+	}
+	manifest, err := decodeAgentManifest(manifestBytes)
+	if err != nil {
+		failCode("invalid candidate manifest: "+err.Error(), commitHash, imageTag)
+		return "", fmt.Errorf("decode candidate manifest: %w", err)
+	}
+	jobManifest := wire.JobManifest{JobHandlers: manifest.JobHandlers, JobCrons: manifest.JobCrons}
+	normalizedManifest, manifestDigest, err := jobssvc.NormalizeJobManifest(jobManifest)
+	if err != nil {
+		failCode(err.Error(), commitHash, imageTag)
+		return "", err
+	}
+	if err := preflightHistoricalJobContracts(ctx, q, agent.ID, normalizedManifest.JobHandlers); err != nil {
+		failCode(err.Error(), commitHash, imageTag)
+		return "", err
+	}
+
 	// Connector binaries are built from the exact committed candidate source.
 	// Every declared target must compile and its manifest must validate before
 	// any deployment state changes. Metadata is persisted against this build;
@@ -596,27 +623,6 @@ func (b *BuildService) Execute(ctx context.Context, plan BuildPlan) (string, err
 		return "", ctx.Err()
 	}
 
-	// Candidate declarations are extracted without runtime credentials before
-	// any live dispatch state changes. Job declarations are projected into the
-	// existing normalized contract used for deployment and startup sync.
-	manifestCtx, cancelManifest := context.WithTimeout(ctx, 30*time.Second)
-	manifestBytes, err := b.containers.InspectManifest(manifestCtx, imageTag)
-	cancelManifest()
-	if err != nil {
-		failInfra(fmt.Errorf("inspect candidate manifest: %w", err), commitHash, imageTag)
-		return "", fmt.Errorf("inspect candidate manifest: %w", err)
-	}
-	manifest, err := decodeAgentManifest(manifestBytes)
-	if err != nil {
-		failCode("invalid candidate manifest: "+err.Error(), commitHash, imageTag)
-		return "", fmt.Errorf("decode candidate manifest: %w", err)
-	}
-	jobManifest := wire.JobManifest{JobHandlers: manifest.JobHandlers, JobCrons: manifest.JobCrons}
-	normalizedManifest, manifestDigest, err := jobssvc.NormalizeJobManifest(jobManifest)
-	if err != nil {
-		failCode(err.Error(), commitHash, imageTag)
-		return "", err
-	}
 	if err := b.persistCandidateJobManifest(ctx, build.ID, agent.ID, commitHash, imageTag, normalizedManifest, manifestDigest); err != nil {
 		failCode(err.Error(), commitHash, imageTag)
 		return "", err

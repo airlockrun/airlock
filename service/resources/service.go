@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -103,11 +102,10 @@ func New(d *db.DB, connectors *connectorssvc.Service, logger *zap.Logger) *Servi
 // exposes the caller's capabilities on each one.
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
+	principals, governanceView, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
 		return nil, err
 	}
-	principals := principalSet(p)
-	governanceView := p.TenantRole == auth.RoleAdmin
 	conns, err := q.ListAvailableConnections(ctx, dbq.ListAvailableConnectionsParams{PrincipalIds: principals, GovernanceView: governanceView})
 	if err != nil {
 		s.logger.Error("list available connections failed", zap.Error(err))
@@ -212,15 +210,6 @@ func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, erro
 		out[i].OwnerName = ownerNames[out[i].OwnerID]
 	}
 	return out, nil
-}
-
-func principalSet(p authz.Principal) []pgtype.UUID {
-	set := p.GranteeSet()
-	out := make([]pgtype.UUID, len(set))
-	for i, id := range set {
-		out[i] = pgtype.UUID{Bytes: id, Valid: true}
-	}
-	return out
 }
 
 // ListGrants returns user grants only to resource managers.

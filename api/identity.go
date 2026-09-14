@@ -2,13 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"math"
 	"net/http"
-	"strconv"
-	"time"
 
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	identitysvc "github.com/airlockrun/airlock/service/identity"
@@ -18,16 +12,15 @@ import (
 )
 
 type identityHandler struct {
-	svc        *identitysvc.Service
-	hmacSecret string
-	publicURL  string
+	svc       *identitysvc.Service
+	publicURL string
 }
 
 func newIdentityHandler(svc *identitysvc.Service, hmacSecret, publicURL string) *identityHandler {
 	if svc == nil {
 		panic("identityHandler: svc is required")
 	}
-	return &identityHandler{svc: svc, hmacSecret: hmacSecret, publicURL: publicURL}
+	return &identityHandler{svc: svc.WithLinkSecret(hmacSecret), publicURL: publicURL}
 }
 
 // telegramIdentityAdapter bridges the trigger driver value-return shape
@@ -47,32 +40,6 @@ func (a telegramIdentityAdapter) GetChat(ctx context.Context, token, chatID stri
 	}, nil
 }
 
-// verifyLinkSignature checks the HMAC bound to (platform, bridgeID, uid, ts)
-// and enforces the 10-minute TTL. Returns an empty string on success or an
-// error message suitable for a 400 response.
-func verifyLinkSignature(platform, bridgeID, uid, ts, sig, secret string) string {
-	payload := platform + ":" + bridgeID + ":" + uid + ":" + ts
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(payload))
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(sig), []byte(expected)) {
-		return "invalid signature"
-	}
-	tsInt, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil {
-		return "invalid timestamp"
-	}
-	if math.Abs(float64(time.Now().Unix()-tsInt)) > 600 {
-		return "link has expired"
-	}
-	return ""
-}
-
-func identityLinkChallengeHash(platform, bridgeID, uid, ts, sig string) string {
-	sum := sha256.Sum256([]byte(platform + ":" + bridgeID + ":" + uid + ":" + ts + ":" + sig))
-	return hex.EncodeToString(sum[:])
-}
-
 // AuthExternal handles GET /auth-external — redirects to frontend for identity linking.
 // The frontend handles auth and calls the LinkIdentity API endpoint.
 func (h *identityHandler) AuthExternal(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +51,12 @@ func (h *identityHandler) AuthExternal(w http.ResponseWriter, r *http.Request) {
 // the originating bridge, and (best-effort) fetches the platform username so
 // the user can confirm they're linking the expected account.
 func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Request) {
+	for _, key := range []string{"platform", "bridge", "uid", "ts", "sig"} {
+		if len(r.URL.Query()[key]) != 1 {
+			writeError(w, http.StatusBadRequest, "missing or duplicate identity link parameter")
+			return
+		}
+	}
 	platform := r.URL.Query().Get("platform")
 	bridgeIDStr := r.URL.Query().Get("bridge")
 	uid := r.URL.Query().Get("uid")
@@ -94,23 +67,13 @@ func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "missing required parameters")
 		return
 	}
-	if msg := verifyLinkSignature(platform, bridgeIDStr, uid, ts, sig, h.hmacSecret); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	bridgeID, err := parseUUID(bridgeIDStr)
+	in, err := h.svc.VerifyLink(platform, bridgeIDStr, uid, ts, sig)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid bridge id")
+		writeServiceError(w, err, "invalid identity link")
 		return
 	}
 
-	res, err := h.svc.Preview(r.Context(), principalFromRequest(r), identitysvc.PreviewInput{
-		Platform:      platform,
-		BridgeID:      bridgeID,
-		UID:           uid,
-		ChallengeHash: identityLinkChallengeHash(platform, bridgeIDStr, uid, ts, sig),
-		ExpiresAt:     time.Unix(mustLinkTimestamp(ts), 0).Add(10 * time.Minute),
-	})
+	res, err := h.svc.Preview(r.Context(), principalFromRequest(r), in)
 	if err != nil {
 		writeServiceError(w, err, "failed to load link preview")
 		return
@@ -131,6 +94,12 @@ func (h *identityHandler) LinkIdentityPreview(w http.ResponseWriter, r *http.Req
 // the user clicks "Confirm" in the preview dialog. Verifies the HMAC and
 // links the platform identity to the authenticated user.
 func (h *identityHandler) LinkIdentity(w http.ResponseWriter, r *http.Request) {
+	for _, key := range []string{"platform", "bridge", "uid", "ts", "sig"} {
+		if len(r.URL.Query()[key]) != 1 {
+			writeError(w, http.StatusBadRequest, "missing or duplicate identity link parameter")
+			return
+		}
+	}
 	platform := r.URL.Query().Get("platform")
 	bridgeIDStr := r.URL.Query().Get("bridge")
 	uid := r.URL.Query().Get("uid")
@@ -141,33 +110,16 @@ func (h *identityHandler) LinkIdentity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing required parameters")
 		return
 	}
-	if msg := verifyLinkSignature(platform, bridgeIDStr, uid, ts, sig, h.hmacSecret); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
-	}
-	bridgeID, err := parseUUID(bridgeIDStr)
+	in, err := h.svc.VerifyLink(platform, bridgeIDStr, uid, ts, sig)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid bridge id")
+		writeServiceError(w, err, "invalid identity link")
 		return
 	}
-	if err := h.svc.Link(r.Context(), principalFromRequest(r), identitysvc.LinkInput{
-		Platform:      platform,
-		BridgeID:      bridgeID,
-		UID:           uid,
-		ChallengeHash: identityLinkChallengeHash(platform, bridgeIDStr, uid, ts, sig),
-	}); err != nil {
+	if err := h.svc.Link(r.Context(), principalFromRequest(r), in.ForLink()); err != nil {
 		writeServiceError(w, err, "failed to link identity")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func mustLinkTimestamp(ts string) int64 {
-	v, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil {
-		panic("identity link timestamp was not verified")
-	}
-	return v
 }
 
 // ListIdentities handles GET /api/v1/identities.

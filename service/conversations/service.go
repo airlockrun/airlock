@@ -183,9 +183,6 @@ type PendingConfirmation struct {
 	RunID       string
 	ToolCallID  string
 	ToolName    string
-	Permission  string
-	Patterns    []string
-	Code        string
 	Input       string
 	Description string
 }
@@ -201,8 +198,8 @@ type Detail struct {
 
 // Get returns the conversation + the newest page of messages + any
 // in-flight or suspended-run metadata the chat store needs to adopt.
-// Owner + surface gate: caller must own it; a2a transport rows are
-// invisible from the web. Both fail with ErrNotFound (don't leak which
+// Owner + surface gate: caller must own an interactive thread.
+// Both fail with ErrNotFound (don't leak which
 // conversations exist on which surface).
 func (s *Service) Get(ctx context.Context, p authz.Principal, convID uuid.UUID) (Detail, error) {
 	conv, err := s.OwnedConversation(ctx, p, convID)
@@ -248,17 +245,9 @@ func parsePendingConfirmation(checkpointJSON []byte) *PendingConfirmation {
 				Input json.RawMessage `json:"input"`
 			} `json:"pendingToolCalls"`
 			Data struct {
-				ToolCallID string `json:"toolCallID"`
-				Metadata   struct {
+				Metadata struct {
 					Description string `json:"description"`
 				} `json:"metadata"`
-				Child struct {
-					Confirmation struct {
-						Permission string   `json:"permission"`
-						Patterns   []string `json:"patterns"`
-						Code       string   `json:"code"`
-					} `json:"confirmation"`
-				} `json:"child"`
 			} `json:"data"`
 		} `json:"suspensionContext"`
 	}
@@ -267,15 +256,6 @@ func parsePendingConfirmation(checkpointJSON []byte) *PendingConfirmation {
 	}
 	sc := cp.SuspensionContext
 	switch {
-	case sc.Reason == "delegated" && sc.Data.Child.Confirmation.Code != "":
-		conf := sc.Data.Child.Confirmation
-		return &PendingConfirmation{
-			ToolCallID: sc.Data.ToolCallID,
-			ToolName:   conf.Permission,
-			Permission: conf.Permission,
-			Patterns:   conf.Patterns,
-			Code:       conf.Code,
-		}
 	case len(sc.PendingToolCalls) > 0:
 		pc := sc.PendingToolCalls[0]
 		// Plain-language summary for the card: from the suspension metadata,
@@ -410,7 +390,7 @@ func (s *Service) OwnedConversation(ctx context.Context, p authz.Principal, conv
 	conv, err := dbq.New(s.db.Pool()).GetConversationByID(ctx, toPg(convID))
 	if err != nil ||
 		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != p.UserID ||
-		conv.Source == "a2a" {
+		(conv.Source != "web" && conv.Source != "bridge") {
 		return dbq.AgentConversation{}, service.ErrNotFound
 	}
 	if err := authz.Authorize(ctx, dbq.New(s.db.Pool()), p, authz.AgentConversation, uuid.UUID(conv.AgentID.Bytes)); err != nil {

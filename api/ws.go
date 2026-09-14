@@ -2,17 +2,20 @@ package api
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/airlockrun/airlock/apperr"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/realtime"
+	"github.com/airlockrun/airlock/service/accounts"
+	agentsservice "github.com/airlockrun/airlock/service/agents"
+	jobservice "github.com/airlockrun/airlock/service/jobs"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -38,22 +41,6 @@ func NewWSHandler(database *db.DB, hub *realtime.Hub, handler *realtime.Handler,
 
 type wsMemberships map[uuid.UUID]string
 
-func loadWSMemberships(ctx context.Context, q *dbq.Queries, userID uuid.UUID) (wsMemberships, error) {
-	// airlockvet:allow-dbq reason: live WebSocket authorization reads only the authenticated user's current agent grants
-	rows, err := q.ListUserAgentGrants(ctx, toPgUUID(userID))
-	if err != nil {
-		return nil, err
-	}
-	memberships := make(wsMemberships, len(rows))
-	for _, row := range rows {
-		if !row.ID.Valid {
-			return nil, errors.New("invalid agent membership id")
-		}
-		memberships[pgUUID(row.ID)] = row.Role
-	}
-	return memberships, nil
-}
-
 // Upgrade handles GET /ws using the HttpOnly access cookie, upgrades to
 // WebSocket, and auto-subscribes the connection to every agent the user holds
 // an explicit per-user grant on (via agent_grants). Narrower topics are added
@@ -68,14 +55,14 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "query token authentication is not supported")
 		return
 	}
-	cookie, err := r.Cookie(accessCookieName)
+	cookie, err := auth.UniqueCookie(r, accessCookieName)
 	if err != nil || cookie.Value == "" {
 		writeError(w, http.StatusUnauthorized, "missing access cookie")
 		return
 	}
 
 	claims, err := auth.ValidateUserAccessToken(h.jwtSecret, cookie.Value)
-	if err != nil || claims.MustChangePassword {
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid or expired token")
 		return
 	}
@@ -94,8 +81,7 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or revoked session")
 		return
 	}
-	// airlockvet:allow-dbq reason: pure read of caller's own grant rows; no authz decision to gate (you can always see what you're a member of)
-	memberships, err := loadWSMemberships(r.Context(), q, userID)
+	memberships, err := accounts.Subscriptions(r.Context(), q, authz.PrincipalFromClaims(claims))
 	if err != nil {
 		h.logger.Error("list member agents for ws", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent membership")
@@ -114,6 +100,7 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	// returns, while the WebSocket connection remains active.
 	ctx, cancel := context.WithDeadline(context.Background(), claims.ExpiresAt.Time)
 	conn := realtime.NewConn(ws, userID, claims.Email, auth.Role(claims.TenantRole), cancel, h.logger)
+	conn.Identity = claims.Identity()
 	// Replay cursor: max Envelope.Seq the client already processed.
 	// Absent/garbage → 0 → fresh connect, no replay (the client's
 	// normal initial DB load covers it). Must be set before Subscribe.
@@ -146,6 +133,38 @@ func (h *WSHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// NewRealtimeHandler wires dynamic subscriptions to their domain services.
+func NewRealtimeHandler(database *db.DB, hub *realtime.Hub) *realtime.Handler {
+	q := dbq.New(database.Pool())
+	principal := func(ctx context.Context, conn *realtime.Conn) (authz.Principal, error) {
+		claims, err := conn.Identity.Resolve(ctx, q)
+		if err != nil {
+			return authz.Principal{}, apperr.ErrUnauthorized
+		}
+		if err := auth.RequireSecuredAccount(claims); err != nil {
+			return authz.Principal{}, err
+		}
+		p := authz.PrincipalFromClaims(claims)
+		if p.UserID != conn.UserID {
+			return authz.Principal{}, apperr.ErrUnauthorized
+		}
+		return p, nil
+	}
+	return realtime.NewHandler(hub, func(ctx context.Context, c *realtime.Conn, id uuid.UUID) error {
+		p, err := principal(ctx, c)
+		if err != nil {
+			return err
+		}
+		return agentsservice.AuthorizeBuildSubscription(ctx, q, p, id)
+	}, func(ctx context.Context, c *realtime.Conn, id uuid.UUID) error {
+		p, err := principal(ctx, c)
+		if err != nil {
+			return err
+		}
+		return jobservice.AuthorizeSubscription(ctx, q, p, id)
+	})
+}
+
 func (h *WSHandler) monitorAuthorization(ctx context.Context, cancel context.CancelFunc, conn *realtime.Conn, claims *auth.Claims, userID uuid.UUID, memberships wsMemberships) {
 	ticker := time.NewTicker(h.pollEvery)
 	defer ticker.Stop()
@@ -166,15 +185,15 @@ func (h *WSHandler) monitorAuthorization(ctx context.Context, cancel context.Can
 				cancel()
 				return
 			}
-			current, err := loadWSMemberships(ctx, q, userID)
+			p := authz.PrincipalFromClaims(live)
+			current, err := accounts.Subscriptions(ctx, q, p)
 			if err != nil || !maps.Equal(memberships, current) {
 				h.logger.Info("closing ws after agent memberships changed", zap.String("uid", userID.String()), zap.Error(err))
 				cancel()
 				return
 			}
-			p := authz.UserPrincipal(userID, auth.Role(live.TenantRole))
 			for _, agentID := range conn.JobsSubscriptions() {
-				if err := authz.Authorize(ctx, q, p, authz.AgentJobView, agentID); err != nil {
+				if err := jobservice.AuthorizeSubscription(ctx, q, p, agentID); err != nil {
 					h.logger.Info("closing ws after jobs subscription authorization changed",
 						zap.String("uid", userID.String()), zap.String("agent_id", agentID.String()), zap.Error(err))
 					cancel()

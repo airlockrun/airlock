@@ -160,16 +160,16 @@ INSERT INTO agent_builds (
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     rollback_target_id, sdk_version, todos, exit_status, exit_message, build_model,
-    deployment_phase
+    deployment_phase, chat_origin_id
 )
 VALUES (
     $1, $2, 'building', $3,
     '', '', '', '', 0, '',
     0, 0, 0, 0, 0,
     $4, '', '[]', '', '', '',
-    'building'
+    'building', $5
 )
-RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at
+RETURNING id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at, chat_origin_id
 `
 
 type CreateAgentBuildParams struct {
@@ -177,6 +177,7 @@ type CreateAgentBuildParams struct {
 	Type             string      `json:"type"`
 	Instructions     string      `json:"instructions"`
 	RollbackTargetID pgtype.UUID `json:"rollback_target_id"`
+	ChatOriginID     pgtype.UUID `json:"chat_origin_id"`
 }
 
 // Initial-row INSERT. Status starts 'building'; output fields start empty
@@ -190,6 +191,7 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		arg.Type,
 		arg.Instructions,
 		arg.RollbackTargetID,
+		arg.ChatOriginID,
 	)
 	var i AgentBuild
 	err := row.Scan(
@@ -226,6 +228,7 @@ func (q *Queries) CreateAgentBuild(ctx context.Context, arg CreateAgentBuildPara
 		&i.JobManifestExtractedAt,
 		&i.JobManifestDigest,
 		&i.CancelRequestedAt,
+		&i.ChatOriginID,
 	)
 	return i, err
 }
@@ -513,7 +516,7 @@ func (q *Queries) FinalizeStoppedAgentDeployment(ctx context.Context, arg Finali
 }
 
 const getAgentBuild = `-- name: GetAgentBuild :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at FROM agent_builds WHERE id = $1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at, chat_origin_id FROM agent_builds WHERE id = $1
 `
 
 func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild, error) {
@@ -553,6 +556,7 @@ func (q *Queries) GetAgentBuild(ctx context.Context, id pgtype.UUID) (AgentBuild
 		&i.JobManifestExtractedAt,
 		&i.JobManifestDigest,
 		&i.CancelRequestedAt,
+		&i.ChatOriginID,
 	)
 	return i, err
 }
@@ -578,7 +582,7 @@ func (q *Queries) GetAgentBuildByIntegrationToken(ctx context.Context, integrati
 }
 
 const getAgentBuildForDeployment = `-- name: GetAgentBuildForDeployment :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at, chat_origin_id
 FROM agent_builds
 WHERE id = $1 AND agent_id = $2
 FOR UPDATE
@@ -626,12 +630,13 @@ func (q *Queries) GetAgentBuildForDeployment(ctx context.Context, arg GetAgentBu
 		&i.JobManifestExtractedAt,
 		&i.JobManifestDigest,
 		&i.CancelRequestedAt,
+		&i.ChatOriginID,
 	)
 	return i, err
 }
 
 const getLatestBuildForAgent = `-- name: GetLatestBuildForAgent :one
-SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
+SELECT id, agent_id, type, status, instructions, source_ref, image_ref, sol_log, docker_log, log_seq, error_message, started_at, finished_at, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate, rollback_target_id, sdk_version, todos, exit_status, exit_message, failure_kind, build_model, integration_token_hash, integration_token_expires_at, deployment_phase, deployment_target_status, deployment_token, job_manifest_extracted_at, job_manifest_digest, cancel_requested_at, chat_origin_id FROM agent_builds WHERE agent_id = $1 ORDER BY started_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUID) (AgentBuild, error) {
@@ -671,6 +676,7 @@ func (q *Queries) GetLatestBuildForAgent(ctx context.Context, agentID pgtype.UUI
 		&i.JobManifestExtractedAt,
 		&i.JobManifestDigest,
 		&i.CancelRequestedAt,
+		&i.ChatOriginID,
 	)
 	return i, err
 }
@@ -875,7 +881,7 @@ func (q *Queries) ListBuildingAgentBuilds(ctx context.Context) ([]ListBuildingAg
 }
 
 const listPausedAgentDeployments = `-- name: ListPausedAgentDeployments :many
-SELECT agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.tools_hash, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline, build.deployment_token, build.deployment_phase
+SELECT agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline, build.deployment_token, build.deployment_phase
 FROM agents agent
 JOIN agent_builds build ON build.id = agent.job_dispatch_paused_build_id
                        AND build.agent_id = agent.id
@@ -921,7 +927,6 @@ type ListPausedAgentDeploymentsRow struct {
 	McpEnabled               bool               `json:"mcp_enabled"`
 	AllowPublicMcp           bool               `json:"allow_public_mcp"`
 	AllowPublicRoutes        bool               `json:"allow_public_routes"`
-	ToolsHash                []byte             `json:"tools_hash"`
 	Emoji                    string             `json:"emoji"`
 	AllowOauthMcpPrompt      bool               `json:"allow_oauth_mcp_prompt"`
 	AllowPublicMcpPrompt     bool               `json:"allow_public_mcp_prompt"`
@@ -986,7 +991,6 @@ func (q *Queries) ListPausedAgentDeployments(ctx context.Context) ([]ListPausedA
 			&i.McpEnabled,
 			&i.AllowPublicMcp,
 			&i.AllowPublicRoutes,
-			&i.ToolsHash,
 			&i.Emoji,
 			&i.AllowOauthMcpPrompt,
 			&i.AllowPublicMcpPrompt,

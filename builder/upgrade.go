@@ -24,84 +24,74 @@ import (
 // the agent's own exit-tool summary already describes the outcome, so
 // re-prompting just produces redundant text.
 type PostUpgradeNotifier interface {
-	NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error
+	NotifyUpgradeComplete(ctx context.Context, agentID, sourceRunID uuid.UUID, conversationID, status, message string) error
 }
 
 // PostUpgradeSystemNotifier is the parallel sink for upgrades initiated
 // from the in-airlock system agent (not from an agent's own
 // conversation). Same status/message contract as PostUpgradeNotifier;
-// the target is the system_conversations.id of the conversation that triggered the
-// upgrade. Exactly one of {ConversationID, SystemConversationID} is set on
-// any given UpgradeInput; the builder picks the notifier accordingly.
+// the immutable async origin selects the exact initiating run and conversation.
 type PostUpgradeSystemNotifier interface {
-	NotifyUpgradeComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error
+	NotifyUpgradeComplete(ctx context.Context, agentID, conversationID, originRunID uuid.UUID, status, message string) error
 }
 
 // PostBuildSystemNotifier is the initial-build counterpart of
 // PostUpgradeSystemNotifier: called after a build kicked off by a
 // system-agent create_agent tool finishes (success or failure), so the
 // system agent surfaces the outcome and resumes. Only the system-agent
-// create path sets BuildInput.SystemConversationID; the web create path
+// create path sets BuildInput.ChatOriginID; the web create path
 // has none and gets no notification (status shows in the build view).
 type PostBuildSystemNotifier interface {
-	NotifyBuildComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error
+	NotifyBuildComplete(ctx context.Context, agentID, conversationID, originRunID uuid.UUID, status, message string) error
 }
 
 // UpgradeInput describes an upgrade request.
 //
-// ConversationID and SystemConversationID are mutually exclusive: an upgrade
-// triggered from a web/bridge/A2A agent conversation sets the former;
-// one triggered from a system-agent conversation sets the latter. The
-// post-build outcome is routed to whichever was set — see
-// BuildService.notifyUpgradeOutcome.
+// ChatOriginID references the persisted initiating run. Conversation fields
+// provide codegen context, not notification authority.
 type UpgradeInput struct {
-	AgentID              string
-	InitiatorUserID      pgtype.UUID // user who triggered the upgrade; attributes codegen spend (falls back to owner)
-	RunID                string      // the run that triggered the upgrade
-	Reason               string      // "llm_request", "auto_fix", "manual", "source_deploy"
-	Description          string      // what to change
-	Message              string      // build description persisted without invoking codegen
-	ConversationID       string      // conversation that triggered the upgrade (for post-upgrade reply)
-	SystemConversationID string      // system-agent conversation that triggered the upgrade (mutually exclusive with ConversationID)
-	ErrorMessage         string      // from failed run (auto_fix)
-	PanicTrace           string      // from failed run (auto_fix)
-	InputPayload         string      // JSON of failed run input (auto_fix)
-	Actions              string      // JSON of recorded actions before failure (auto_fix)
-	Messages             string      // conversation messages from the failed run
-	Logs                 string      // captured log lines from the failed run (auto_fix)
-	BuildError           string      // error_message of the agent's most recent failed build
-	BuildLog             string      // tail of that build's docker log
+	ChatOriginID    pgtype.UUID
+	AgentID         string
+	InitiatorUserID pgtype.UUID // user who triggered the upgrade; attributes codegen spend (falls back to owner)
+	RunID           string      // codegen correlation ID, not notification authority
+	Reason          string      // "llm_request", "auto_fix", "manual", "source_deploy"
+	Description     string      // what to change
+	Message         string      // build description persisted without invoking codegen
+	ConversationID  string      // conversation that triggered the upgrade (for post-upgrade reply)
+	ErrorMessage    string      // from failed run (auto_fix)
+	PanicTrace      string      // from failed run (auto_fix)
+	InputPayload    string      // JSON of failed run input (auto_fix)
+	Actions         string      // JSON of recorded actions before failure (auto_fix)
+	Messages        string      // conversation messages from the failed run
+	Logs            string      // captured log lines from the failed run (auto_fix)
+	BuildError      string      // error_message of the agent's most recent failed build
+	BuildLog        string      // tail of that build's docker log
 }
 
-// notifyUpgradeOutcome routes the post-build message to whichever sink
-// matches the originating surface. Returns silently on:
-//   - no target set (cron / auto / unattended upgrades; nothing to post)
-//   - the target's notifier never registered (process started without
-//     it — log the miss, don't panic)
-//   - conversationID/conversationID parse failure (defensive — these are
-//     caller-supplied strings stored in agent_builds; a malformed one
-//     mustn't crash the build pipeline)
-func (b *BuildService) notifyUpgradeOutcome(ctx context.Context, agentID uuid.UUID, conversationID, systemConversationID, status, message string) {
-	if systemConversationID != "" {
-		if b.upgradeSystemNotifier == nil {
-			b.logger.Warn("system-conversation upgrade outcome dropped: no system notifier registered",
-				zap.String("conversation_id", systemConversationID))
-			return
-		}
-		tid, err := uuid.Parse(systemConversationID)
-		if err != nil {
-			b.logger.Error("invalid system conversation id on upgrade outcome", zap.String("conversation_id", systemConversationID), zap.Error(err))
-			return
-		}
-		if nerr := b.upgradeSystemNotifier.NotifyUpgradeComplete(ctx, agentID, tid, status, message); nerr != nil {
-			b.logger.Error("post-upgrade system-conversation notification failed", zap.Error(nerr))
-		}
+// notifyUpgradeOutcome routes through the persisted source run. Unattended
+// upgrades have no chat origin; chat-originated work requires its notifier.
+func (b *BuildService) notifyUpgradeOutcome(ctx context.Context, agentID uuid.UUID, originID pgtype.UUID, status, message string) {
+	if !originID.Valid {
 		return
 	}
-	if conversationID != "" && b.upgradeNotifier != nil {
-		if nerr := b.upgradeNotifier.NotifyUpgradeComplete(ctx, agentID, conversationID, status, message); nerr != nil {
-			b.logger.Error("post-upgrade conversation notification failed", zap.Error(nerr))
+	origin, err := dbq.New(b.db.Pool()).GetAsyncChatOrigin(ctx, originID)
+	if err != nil || !origin.AgentID.Valid || uuid.UUID(origin.AgentID.Bytes) != agentID {
+		b.logger.Error("invalid upgrade notification origin", zap.Error(err))
+		return
+	}
+	if origin.SystemRunID.Valid {
+		if b.upgradeSystemNotifier == nil {
+			panic("builder: system upgrade notifier is required")
 		}
+		err = b.upgradeSystemNotifier.NotifyUpgradeComplete(ctx, agentID, uuid.UUID(origin.SystemConversationID.Bytes), uuid.UUID(origin.SystemRunID.Bytes), status, message)
+	} else {
+		if b.upgradeNotifier == nil {
+			panic("builder: hosted upgrade notifier is required")
+		}
+		err = b.upgradeNotifier.NotifyUpgradeComplete(ctx, agentID, uuid.UUID(origin.SourceRunID.Bytes), uuid.UUID(origin.ConversationID.Bytes).String(), status, message)
+	}
+	if err != nil {
+		b.logger.Error("post-upgrade notification failed", zap.Error(err))
 	}
 }
 
@@ -199,6 +189,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	}
 
 	plan := BuildPlan{
+		ChatOriginID:    input.ChatOriginID,
 		Agent:           agent,
 		Kind:            BuildKindUpgrade,
 		Instruction:     strings.TrimSpace(input.Description),
@@ -224,7 +215,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 				UpgradeStatus: "idle",
 				ErrorMessage:  "",
 			})
-			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "refused", refErr.Message)
+			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ChatOriginID, "refused", refErr.Message)
 			return
 		}
 		errMsg := runErr.Error()
@@ -243,7 +234,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 		// without it the user only sees "still spinning" then nothing.
 		// Cancellation skips the notification (the toast already covered it).
 		if !errors.Is(runErr, context.Canceled) {
-			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "error", errMsg)
+			b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ChatOriginID, "error", errMsg)
 		}
 		return
 	}
@@ -262,7 +253,7 @@ func (b *BuildService) RunUpgrade(_ context.Context, input UpgradeInput) {
 	if msg == "" {
 		msg = "Upgrade complete: " + input.Description
 	}
-	b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ConversationID, input.SystemConversationID, "success", msg)
+	b.notifyUpgradeOutcome(dbCtx, agentUUID, input.ChatOriginID, "success", msg)
 }
 
 // autoFixContextFromInput returns a populated AutoFixContext when the

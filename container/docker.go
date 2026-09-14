@@ -85,6 +85,7 @@ func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, networkPolicy Runt
 
 	go m.reapIdleContainers()
 	m.cleanupOrphanedBuilderContainers()
+	m.reapTestJSExecutors()
 
 	return m
 }
@@ -1740,6 +1741,7 @@ func (m *DockerManager) reapIdleContainers() {
 				unlock()
 			}
 			m.pruneAgentNetworks(context.Background())
+			m.reapTestJSExecutors()
 		}
 	}
 }

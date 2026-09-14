@@ -17,6 +17,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/execution"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -80,6 +81,7 @@ type EnqueueRequest struct {
 	AgentID           uuid.UUID
 	RuntimeGeneration int64
 	SourceRunID       uuid.UUID
+	InvocationProof   execution.InvocationProof
 	HandlerName       string
 	HandlerVersion    int32
 	InputSchemaHash   string
@@ -124,6 +126,9 @@ func (s *Service) Enqueue(ctx context.Context, request EnqueueRequest) (EnqueueR
 	agent, err := q.GetAgentByIDForUpdate(ctx, pgAgentID)
 	if err != nil {
 		return EnqueueResult{}, service.ErrNotFound
+	}
+	if _, err := execution.ResolveInvocation(ctx, q, request.AgentID, request.SourceRunID, request.RuntimeGeneration, request.InvocationProof); err != nil {
+		return EnqueueResult{}, err
 	}
 
 	lookup := dbq.GetAgentJobByIDAndAgentParams{ID: toPgUUID(request.ID), AgentID: pgAgentID}
@@ -710,34 +715,15 @@ func candidateContractError(name string, version int32, inputHash, outputHash st
 }
 
 func initiatorFromRun(ctx context.Context, q *dbq.Queries, run dbq.Run) (string, pgtype.UUID, pgtype.UUID, string, error) {
-	if run.TriggerType == "code" {
-		return "", pgtype.UUID{}, pgtype.UUID{}, "", errors.New("agent-created code runs cannot authorize jobs")
+	c, err := execution.Resolve(ctx, q, uuid.UUID(run.AgentID.Bytes), uuid.UUID(run.ID.Bytes))
+	if err != nil {
+		return "", pgtype.UUID{}, pgtype.UUID{}, "", err
 	}
-	if run.TriggerType == "job" {
-		parent, err := q.GetAgentJobByAttemptRunID(ctx, run.ID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return "", pgtype.UUID{}, pgtype.UUID{}, "", errors.New("job source run has no durable parent")
-			}
-			return "", pgtype.UUID{}, pgtype.UUID{}, "", err
-		}
-		return parent.InitiatorKind, parent.InitiatorUserID, parent.InitiatorConversationID, parent.InitiatorAccess, nil
+	kind := c.Origin.Actor
+	if kind == "app" {
+		kind = "system"
 	}
-	if run.TriggerType == "background" && (run.CallerUserID.Valid || run.CallerAccess != "public") {
-		return "", pgtype.UUID{}, pgtype.UUID{}, "", errors.New("background runs must use system identity")
-	}
-	if run.CallerUserID.Valid {
-		if run.CallerAccess != "user" && run.CallerAccess != "admin" {
-			return "", pgtype.UUID{}, pgtype.UUID{}, "", errors.New("registered users require user or admin access")
-		}
-		return "user", run.CallerUserID, run.CallerConversationID, run.CallerAccess, nil
-	}
-	switch run.TriggerType {
-	case "prompt", "route":
-		return "anonymous", pgtype.UUID{}, run.CallerConversationID, "public", nil
-	default:
-		return "system", pgtype.UUID{}, run.CallerConversationID, "public", nil
-	}
+	return kind, c.Origin.UserID, c.Origin.ConversationID, string(c.Runtime.Caller.Access), nil
 }
 
 func toPgUUID(id uuid.UUID) pgtype.UUID {

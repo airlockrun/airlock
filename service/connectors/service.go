@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -175,14 +174,11 @@ func (s *Service) Heartbeat(ctx context.Context, connectorID uuid.UUID, protocol
 
 func (s *Service) List(ctx context.Context, p authz.Principal) ([]Resource, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, p, authz.ResourceInventoryView, uuid.Nil); err != nil {
+	principals, governanceView, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
 		return nil, err
 	}
-	principals := make([]pgtype.UUID, len(p.GranteeSet()))
-	for i, id := range p.GranteeSet() {
-		principals[i] = pg(id)
-	}
-	rows, err := q.ListAvailableConnectors(ctx, dbq.ListAvailableConnectorsParams{PrincipalIds: principals, GovernanceView: p.TenantRole == auth.RoleAdmin})
+	rows, err := q.ListAvailableConnectors(ctx, dbq.ListAvailableConnectorsParams{PrincipalIds: principals, GovernanceView: governanceView})
 	if err != nil {
 		return nil, err
 	}

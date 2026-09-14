@@ -7,7 +7,7 @@ option go_package = "github.com/airlockrun/airlock/gen/airlock/v1;airlockv1";
 import "google/protobuf/timestamp.proto";
 
 // System agent: an in-airlock chat surface that lets operators manage
-// agents, bridges, connections, members, A2A, runs, etc. through tool
+// agents, bridges, connections, members, runs, etc. through tool
 // calls. Per-user multi-conversation chat history; no JS VM; tools
 // wrap existing service.{domain} methods. See airlock/sysagent.
 

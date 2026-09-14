@@ -29,7 +29,7 @@ var (
 	protoUnmarshal          = apihelpers.ProtoUnmarshal
 )
 
-// notRunnableMCPMessage is the A2A/MCP surface's counterpart to
+// notRunnableMCPMessage is the external MCP surface's counterpart to
 // api.notRunnableResponse — a caller-facing JSON-RPC error message
 // naming the target agent when its container can't accept traffic.
 // notRunnable is false for any other error.

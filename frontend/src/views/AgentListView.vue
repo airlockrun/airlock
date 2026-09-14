@@ -34,7 +34,7 @@ function goToAgent(id: string) {
     </div>
 
     <!-- Loading skeletons -->
-    <div v-if="store.loading" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem">
+    <div v-if="store.loading" class="agent-grid">
       <Card v-for="i in 6" :key="i">
         <template #content>
           <Skeleton width="60%" height="1.25rem" style="margin-bottom: 0.5rem" />
@@ -45,7 +45,7 @@ function goToAgent(id: string) {
     </div>
 
     <!-- App grid — Airlock Assistant is pinned first even when there are no apps. -->
-    <div v-else style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem">
+    <div v-else class="agent-grid">
       <Card
         style="cursor: pointer; border: 1px solid var(--p-primary-200)"
         @click="router.push('/system')"
@@ -126,3 +126,12 @@ function goToAgent(id: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 1rem;
+  overflow-wrap: anywhere;
+}
+</style>

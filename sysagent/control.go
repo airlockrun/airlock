@@ -7,14 +7,13 @@ import (
 
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
-	"github.com/airlockrun/airlock/service"
 	servicemodels "github.com/airlockrun/airlock/service/models"
+	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol"
 	"github.com/airlockrun/sol/agent"
 	"github.com/airlockrun/sol/bus"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -22,15 +21,23 @@ import (
 // matching run was found and cancelled. The runChat goroutine sees
 // ctx.Done() through sol.Runner and exits with status='cancelled' via
 // the existing sol.RunCancelled branch.
-func (s *Service) CancelRun(runID uuid.UUID) bool {
+func (s *Service) CancelRun(ctx context.Context, p authz.Principal, runID uuid.UUID) (bool, error) {
+	changed, err := s.domain.CancelRun(ctx, p, runID)
+	if err != nil {
+		return false, err
+	}
 	s.activeMu.Lock()
 	cancel, ok := s.activeRuns[runID]
 	s.activeMu.Unlock()
 	if !ok {
-		return false
+		return changed, nil
 	}
 	cancel()
-	return true
+	return changed, nil
+}
+
+func (s *Service) ControlConversation(ctx context.Context, p authz.Principal, conversationID uuid.UUID, command, args string) (bool, error) {
+	return s.domain.Control(ctx, p, conversationID, command, args)
 }
 
 // Compact runs sol's user-triggered compaction on a sysagent
@@ -45,17 +52,15 @@ func (s *Service) CancelRun(runID uuid.UUID) bool {
 // as a normal assistant message), just executed locally because
 // sysagent has no agent container.
 func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID uuid.UUID) (string, error) {
-	if !p.IsAuthenticatedUser() {
-		return "", service.ErrUnauthorized
-	}
-	q := dbq.New(s.db.Pool())
-	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
+	runID, _, err := s.domain.StartRun(ctx, p, conversationID, PromptInput{})
 	if err != nil {
-		return "", service.ErrNotFound
+		return "", err
 	}
-	if uuid.UUID(conversation.UserID.Bytes) != p.UserID {
-		return "", service.ErrNotFound
-	}
+	status := "error"
+	defer func() { s.finishRun(ctx, runID, status, "") }()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go s.domain.ObserveRun(ctx, p, runID, cancel)
 
 	resolved, err := servicemodels.SystemDefault(ctx, s.db, s.encryptor, "text")
 	if err != nil {
@@ -63,15 +68,22 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 	}
 
 	compactBus := bus.New()
-	tools := s.buildToolSet(p)
-	store := newSessionStore(s.db, conversationID, uuid.Nil)
+	tools := s.buildToolSet(ctx, dbq.New(s.db.Pool()), p)
+	store, err := s.domain.SessionStore(ctx, p, conversationID, runID)
+	if err != nil {
+		return "", err
+	}
 
+	env, err := s.envFor(ctx, p, "", conversationID)
+	if err != nil {
+		return "", err
+	}
 	solAgent := &agent.Agent{
 		Name:  "sysagent",
 		Model: resolved.ProviderCatalogID + "/" + resolved.ModelName,
 		// Compaction summarizes history; there's no live channel, so <env>
 		// carries only the date + (resolved) user, no platform.
-		SystemPrompt: SystemPrompt(s.envFor(ctx, p.UserID, "", conversationID), tools),
+		SystemPrompt: SystemPrompt(env, tools),
 		Tools:        tools,
 		MaxSteps:     1,
 	}
@@ -86,6 +98,7 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 		Bus:                       compactBus,
 		SessionStore:              store,
 		Executor:                  tool.NewLocalExecutor(tools, nil),
+		ToolCallExecutionMode:     stream.ToolCallExecutionSync,
 		Quiet:                     true,
 	})
 
@@ -99,5 +112,6 @@ func (s *Service) Compact(ctx context.Context, p authz.Principal, conversationID
 	if result == nil || result.Summary == "" {
 		return "", errors.New("compact produced no summary")
 	}
+	status = "complete"
 	return result.Summary, nil
 }

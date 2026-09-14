@@ -9,12 +9,12 @@ import (
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/lockout"
-	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	localepkg "github.com/airlockrun/airlock/locale"
+	"github.com/airlockrun/airlock/service/accounts"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -280,33 +280,18 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
-	claims := auth.ClaimsFromContext(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-
-	userID, err := parseUUID(claims.Subject)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid token")
-		return
-	}
-
 	q := dbq.New(h.db.Pool())
-	// airlockvet:allow-dbq reason: pre-Principal bootstrap (activate/login/refresh) — runs before authz can apply, gated by HMAC / activation token / password
-	user, err := q.GetUserByID(r.Context(), toPgUUID(userID))
+	profile, err := accounts.Self(r.Context(), q, principalFromRequest(r))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeServiceError(w, err, "failed to load profile")
 		return
 	}
-
-	actions := authz.GrantedTenantActions(auth.Role(claims.TenantRole))
-	perms := make([]string, len(actions))
-	for i, a := range actions {
+	perms := make([]string, len(profile.Actions))
+	for i, a := range profile.Actions {
 		perms[i] = string(a)
 	}
 	writeProto(w, http.StatusOK, &airlockv1.MeResponse{
-		User:              convert.UserToProto(user),
+		User:              convert.UserToProto(profile.User),
 		TenantPermissions: perms,
 	})
 }

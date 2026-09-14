@@ -37,7 +37,7 @@ export type ToolOutcome = '' | 'success' | 'error' | 'denied'
 export interface ToolBlock {
   kind: 'tool'
   toolCallId: string
-  toolName: string // raw name — drives collapse defaults + promptAgentText
+  toolName: string // raw name used for collapse defaults
   label: string // human display name (toolLabel of name + args)
   input: string
   description: string // plain-language summary from the call args (run_js)
@@ -75,20 +75,9 @@ export function toolOutputInfo(out: any, t: Translate): { text: string; outcome:
 }
 
 // toolLabel maps a raw tool name (+ its call args) to the human label
-// shown in the transcript. Only the two framework tools are renamed;
-// user-registered tools keep their own name. `args` may be the raw args
-// object or a JSON string (live path); a slug is only pulled for
-// promptAgent.
-export function toolLabel(toolName: string, args: unknown, t: Translate): string {
+// shown in the transcript. User-registered tools keep their own name.
+export function toolLabel(toolName: string, t: Translate): string {
   if (toolName === 'run_js') return t('chat.tool.code')
-  if (toolName === 'promptAgent') {
-    let a = args
-    if (typeof a === 'string') {
-      try { a = JSON.parse(a) } catch { a = undefined }
-    }
-    const slug = a && typeof a === 'object' ? (a as any).agent : undefined
-    return slug ? t('chat.tool.a2aCallWithAgent', { agent: slug }) : t('chat.tool.a2aCall')
-  }
   return toolName
 }
 
@@ -119,23 +108,6 @@ export function toolDescription(args: unknown): string {
 }
 
 /** Stringify tool args for display, dropping framework-only keys. */
-// promptAgentText pulls the human-facing `text` out of a promptAgent
-// tool result. The wire/LLM form is the full A2A envelope
-// {text,taskId,contextId,state,artifacts} — the model needs the ids for
-// thread continuity, but the human should only ever see `text`. Returns
-// null for non-promptAgent tools or unparseable output so callers fall
-// back to the raw `<pre>` render.
-export function promptAgentText(toolName: string, output: string): string | null {
-  if (toolName !== 'promptAgent' || !output) return null
-  try {
-    const o = JSON.parse(output)
-    if (o && typeof o.text === 'string') return o.text
-  } catch {
-    /* not the envelope (e.g. an "Error: ..." string) — show as-is */
-  }
-  return null
-}
-
 export function formatToolArgs(args: any): string {
   if (typeof args === 'string') return args
   if (args && typeof args === 'object') {
@@ -197,7 +169,7 @@ export function enrichMessages(msgs: AgentMessageInfo[], t: Translate = defaultT
             kind: 'tool',
             toolCallId: p.toolCallId,
             toolName: p.toolName || 'tool',
-            label: toolLabel(p.toolName || 'tool', p.args, t),
+            label: toolLabel(p.toolName || 'tool', t),
             input: formatToolArgs(p.args),
             description: toolDescription(p.args),
             output: '',

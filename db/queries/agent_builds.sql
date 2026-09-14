@@ -9,14 +9,14 @@ INSERT INTO agent_builds (
     source_ref, image_ref, sol_log, docker_log, log_seq, error_message,
     llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     rollback_target_id, sdk_version, todos, exit_status, exit_message, build_model,
-    deployment_phase
+    deployment_phase, chat_origin_id
 )
 VALUES (
     @agent_id, @type, 'building', @instructions,
     '', '', '', '', 0, '',
     0, 0, 0, 0, 0,
     sqlc.narg('rollback_target_id'), '', '[]', '', '', '',
-    'building'
+    'building', sqlc.narg('chat_origin_id')
 )
 RETURNING *;
 

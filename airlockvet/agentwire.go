@@ -35,10 +35,11 @@ var AgentWire = &analysis.Analyzer{
 }
 
 func runAgentWire(pass *analysis.Pass) (any, error) {
+	allow := collectAllowMarkers(pass, "allow-agentwire")
+	defer allow.reportUnused()
 	if pass.Pkg.Path() != agentapiPkgPath {
 		return nil, nil
 	}
-	allow := collectAllowMarkers(pass, "allow-agentwire")
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
 	insp.Preorder([]ast.Node{(*ast.CallExpr)(nil)}, func(n ast.Node) {
@@ -48,9 +49,6 @@ func runAgentWire(pass *analysis.Pass) (any, error) {
 			return
 		}
 		if isTestFile(pass, call.Pos()) {
-			return
-		}
-		if allow.allowed(call.Pos()) {
 			return
 		}
 		t := pass.TypesInfo.TypeOf(body)
@@ -74,6 +72,9 @@ func runAgentWire(pass *analysis.Pass) (any, error) {
 		}
 		if obj.Pkg().Path() != agentapiPkgPath {
 			return // declared elsewhere — agentsdk, proto, stdlib are all fine
+		}
+		if allow.allowed(call.Pos()) {
+			return
 		}
 		pass.Reportf(call.Pos(),
 			"%s body uses type %s declared in agentapi/: move the type to agentsdk/wire so the SDK and airlock share one declaration (or annotate with `// airlockvet:allow-agentwire reason: …`)",

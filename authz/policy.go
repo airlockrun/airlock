@@ -17,6 +17,7 @@ const (
 	AxisTenant                    // requires a tenant role
 	AxisIntegration               // agent admin or active codegen build for this agent
 	AxisAuthenticated             // requires a registered user; another gate applies domain capability
+	AxisApp                       // requires the current app credential for the exact target
 )
 
 // Requirement is the minimum access an action needs. Agent is meaningful for
@@ -33,21 +34,24 @@ type Requirement struct {
 // site, so the two routes that can reach the same action can't drift.
 type Action string
 
+const AppRuntime Action = "app.runtime"
+
 const (
 	// Agent axis — member (AccessUser) suffices.
-	AgentGet          Action = "agent.get"
-	AgentUpdate       Action = "agent.update"
-	AgentLifecycle    Action = "agent.lifecycle" // stop / start / suspend
-	AgentGit          Action = "agent.git"       // connect / disconnect / read git binding
-	AgentRunView      Action = "agent.run.view"  // runs list / get / logs (admin: runs span all users)
-	AgentJobView      Action = "agent.job.view"  // jobs and handler contracts span all users
-	AgentMembersView  Action = "agent.members.view"
-	AgentToolsView    Action = "agent.tools.view"
-	AgentBuildsView   Action = "agent.builds.view"  // builds list / get / log stream (admin)
-	AgentConversation Action = "agent.conversation" // create / list web conversations
-	AgentModelsView   Action = "agent.models.view"
-	AgentClone        Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
-	AgentFileResolve  Action = "agent.file.resolve"
+	AgentGet           Action = "agent.get"
+	AgentUpdate        Action = "agent.update"
+	AgentLifecycle     Action = "agent.lifecycle" // stop / start / suspend
+	AgentGit           Action = "agent.git"       // connect / disconnect / read git binding
+	AgentRunView       Action = "agent.run.view"  // runs list / get / logs (admin: runs span all users)
+	AgentJobView       Action = "agent.job.view"  // jobs and handler contracts span all users
+	AgentMembersView   Action = "agent.members.view"
+	AgentToolsView     Action = "agent.tools.view"
+	AgentBuildsView    Action = "agent.builds.view"  // builds list / get / log stream (admin)
+	AgentConversation  Action = "agent.conversation" // create / list web conversations
+	AgentModelsView    Action = "agent.models.view"
+	AgentClone         Action = "agent.clone" // fork this agent's code into a new agent (member of source; also needs TenantAgentClone)
+	AgentFileResolve   Action = "agent.file.resolve"
+	AgentRuntimeInvoke Action = "agent.runtime.invoke"
 
 	// Agent axis — owner (AccessAdmin) required.
 	AgentDelete            Action = "agent.delete"
@@ -58,11 +62,11 @@ const (
 	AgentScheduleFire      Action = "agent.schedule.fire"
 	AgentConnections       Action = "agent.connections" // credentials / MCP / env-vars
 	AgentConnectors        Action = "agent.connectors"
-	AgentSiblings          Action = "agent.siblings"
 	AgentModelsUpdate      Action = "agent.models.update"
 	AgentRoutesView        Action = "agent.routes.view"
 	AgentManagedBotCreate  Action = "agent.managed_bot.create"
 	AgentIntegrationInvoke Action = "agent.integration.invoke"
+	AgentTestExecutor      Action = "agent.test.executor"
 	AgentJobCancel         Action = "agent.job.cancel"
 	AgentJobRetry          Action = "agent.job.retry"
 	ConnectorJobView       Action = "connector.job.view"
@@ -98,6 +102,7 @@ const (
 	TenantSelfProfileUpdate   Action = "tenant.self.profile.update" // update the caller's own profile: user+
 	TenantSelfPasskeyManage   Action = "tenant.self.passkey.manage" // register / list / rename / delete the caller's own passkeys + set/remove own password: user+
 	ResourceInventoryView     Action = "resource.inventory.view"    // list resources available through ownership or grants: user+
+	ResourceGovernanceView    Action = "resource.governance.view"   // tenant-wide read-only inventory visibility: admin
 	ResourceCreate            Action = "resource.create"            // create a reusable resource owned by the caller: user+
 	ResourceView              Action = "resource.view"              // authenticated precondition; resource capability checked by AuthorizeResource
 	ResourceBind              Action = "resource.bind"              // authenticated precondition; resource capability checked by AuthorizeResource
@@ -110,24 +115,40 @@ const (
 	TenantHostView            Action = "tenant.host.view"
 	TenantHostManage          Action = "tenant.host.manage"
 	HostEnrollmentApprove     Action = "host.enrollment.approve"
+	BridgeRunCancel           Action = "bridge.run.cancel"
+	SystemChat                Action = "system.chat"
+	AccountSelfView           Action = "account.self.view"
+	AccountSessionsManage     Action = "account.sessions.manage"
+	AccountSubscriptionsView  Action = "account.subscriptions.view"
+	AccountOAuthManage        Action = "account.oauth.manage"
+	AccountDeviceLogin        Action = "account.device_login"
+	OAuthAccess               Action = "oauth.access"
+	AgentSlashPublic          Action = "agent.slash.public"
+	AgentSlashContext         Action = "agent.slash.context"
+	SystemConversationView    Action = "system.conversation.view"
+	SystemConversationManage  Action = "system.conversation.manage"
+	SystemRunView             Action = "system.run.view"
+	SystemRunCancel           Action = "system.run.cancel"
 )
 
 // policy is the whole permission matrix. Authorize panics on a missing
 // entry (fail loud) so a new action can't silently default to "allowed".
 var policy = map[Action]Requirement{
-	AgentGet:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentUpdate:       {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentLifecycle:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentGit:          {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentRunView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentJobView:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentMembersView:  {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentToolsView:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentBuildsView:   {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentConversation: {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentModelsView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentClone:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
-	AgentFileResolve:  {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
+	AppRuntime:         {Axis: AxisApp},
+	AgentGet:           {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentUpdate:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentLifecycle:     {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentGit:           {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentRunView:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentJobView:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentMembersView:   {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentToolsView:     {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentBuildsView:    {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
+	AgentConversation:  {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentModelsView:    {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentClone:         {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	AgentFileResolve:   {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
+	AgentRuntimeInvoke: {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
 
 	AgentDelete:            {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentBuildManage:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -137,11 +158,11 @@ var policy = map[Action]Requirement{
 	AgentScheduleFire:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConnections:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentConnectors:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
-	AgentSiblings:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentModelsUpdate:      {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentRoutesView:        {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentManagedBotCreate:  {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentIntegrationInvoke: {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
+	AgentTestExecutor:      {Axis: AxisIntegration, Agent: agentsdk.AccessAdmin},
 	AgentJobCancel:         {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	AgentJobRetry:          {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
 	ConnectorJobView:       {Axis: AxisAgent, Agent: agentsdk.AccessAdmin},
@@ -176,6 +197,7 @@ var policy = map[Action]Requirement{
 	TenantSelfProfileUpdate:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantSelfPasskeyManage:   {Axis: AxisTenant, Tenant: auth.RoleUser},
 	ResourceInventoryView:     {Axis: AxisAuthenticated},
+	ResourceGovernanceView:    {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	ResourceCreate:            {Axis: AxisAuthenticated},
 	ResourceView:              {Axis: AxisAuthenticated},
 	ResourceBind:              {Axis: AxisAuthenticated},
@@ -188,11 +210,38 @@ var policy = map[Action]Requirement{
 	TenantHostView:            {Axis: AxisTenant, Tenant: auth.RoleUser},
 	TenantHostManage:          {Axis: AxisTenant, Tenant: auth.RoleAdmin},
 	HostEnrollmentApprove:     {Axis: AxisAuthenticated},
+	BridgeRunCancel:           {Axis: AxisAuthenticated},
+	SystemChat:                {Axis: AxisAuthenticated},
+	AccountSelfView:           {Axis: AxisAuthenticated},
+	AccountSessionsManage:     {Axis: AxisAuthenticated},
+	AccountSubscriptionsView:  {Axis: AxisAuthenticated},
+	AccountOAuthManage:        {Axis: AxisAuthenticated},
+	AccountDeviceLogin:        {Axis: AxisAuthenticated},
+	OAuthAccess:               {Axis: AxisAuthenticated},
+	AgentSlashPublic:          {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
+	AgentSlashContext:         {Axis: AxisAgent, Agent: agentsdk.AccessUser},
+	SystemConversationView:    {Axis: AxisAuthenticated},
+	SystemConversationManage:  {Axis: AxisAuthenticated},
+	SystemRunView:             {Axis: AxisAuthenticated},
+	SystemRunCancel:           {Axis: AxisAuthenticated},
+}
+
+// RequiredAgentAccess returns the minimum app access for an agent-axis action.
+// Unknown or non-agent actions panic rather than weakening a run gate.
+func RequiredAgentAccess(a Action) agentsdk.Access {
+	req, ok := policy[a]
+	if !ok {
+		panic("authz: unknown action " + string(a))
+	}
+	if req.Axis != AxisAgent {
+		panic("authz: not an agent-axis action: " + string(a))
+	}
+	validateRequirement(a, req)
+	return req.Agent
 }
 
 // RequiredTenantRole returns the minimum tenant role for a tenant-axis
-// action, so the router's RequireTenantRole middleware can source its
-// level from the same policy table rather than a literal. Panics if the
+// action for service-side policy projections. Panics if the
 // action is unknown or not tenant-axis (fail loud).
 func RequiredTenantRole(a Action) auth.Role {
 	req, ok := policy[a]
@@ -202,6 +251,7 @@ func RequiredTenantRole(a Action) auth.Role {
 	if req.Axis != AxisTenant {
 		panic("authz: not a tenant-axis action: " + string(a))
 	}
+	validateRequirement(a, req)
 	return req.Tenant
 }
 

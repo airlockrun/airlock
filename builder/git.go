@@ -595,7 +595,7 @@ func git(dir string, args ...string) error {
 
 // runGit runs a git command in the given directory.
 func runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", synchronousGitArgs(args)...)
 	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
@@ -611,7 +611,7 @@ func gitOutput(dir string, args ...string) (string, error) {
 }
 
 func gitOutputContext(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", synchronousGitArgs(args)...)
 	cmd.Dir = dir
 	cmd.Env = append(gitCleanEnv(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
@@ -622,6 +622,14 @@ func gitOutputContext(ctx context.Context, dir string, args ...string) (string, 
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// Agent repositories can be deleted as soon as a Git command returns. Keep
+// automatic maintenance in the foreground so it cannot race that deletion.
+func synchronousGitArgs(args []string) []string {
+	configured := make([]string, 0, len(args)+4)
+	configured = append(configured, "-c", "gc.autoDetach=false", "-c", "maintenance.autoDetach=false")
+	return append(configured, args...)
 }
 
 // gitCleanEnv returns os.Environ() with git-context vars stripped. These

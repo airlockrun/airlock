@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/service"
 	servicemodels "github.com/airlockrun/airlock/service/models"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol"
@@ -21,8 +22,6 @@ import (
 	"github.com/airlockrun/sol/bus"
 	"github.com/airlockrun/sol/eventstream"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -35,62 +34,7 @@ import (
 //     confirmation (true=execute, false=synthesize denial).
 //   - Both empty = auto-resume after an injected system event (see
 //     Service.resumeConversation).
-type PromptInput struct {
-	Message string
-	// Platform is the channel for the <env> block ("web"/"telegram"), set
-	// explicitly by the caller — never inferred. Empty omits the line.
-	Platform string
-	Approved *bool
-	// ResumeRunID on an approve/deny names the run whose
-	// confirmation is being resolved. RunPrompt waits for that run to suspend
-	// before dispatching the resume, so an approval that beats the async
-	// suspend write isn't rejected as a state mismatch. It is required for a
-	// confirmation response.
-	ResumeRunID string
-}
-
-const (
-	// resumeWaitTimeout bounds how long a confirmation resume waits for the
-	// named run to suspend (the conversation flips to awaiting_confirmation
-	// just before). The run streams its confirmation event to the UI before
-	// that write lands, so an approval can arrive a few ms early — wait it out
-	// rather than rejecting it as a state mismatch.
-	resumeWaitTimeout  = 10 * time.Second
-	resumeWaitInterval = 100 * time.Millisecond
-)
-
-// awaitSuspendedSystemRun waits for the run a confirmation response names to
-// reach status='suspended', validating it belongs to this conversation, then
-// returns once it is suspended. Errors are surfaced to the HTTP caller if the
-// run belongs elsewhere, has already finished, or misses the deadline.
-func (s *Service) awaitSuspendedSystemRun(ctx context.Context, q *dbq.Queries, runID uuid.UUID, conv dbq.SystemConversation) error {
-	deadline := time.Now().Add(resumeWaitTimeout)
-	for {
-		run, err := q.GetSystemRunByID(ctx, pgtype.UUID{Bytes: runID, Valid: true})
-		if err != nil {
-			return service.ErrNotFound
-		}
-		if uuid.UUID(run.ConversationID.Bytes) != uuid.UUID(conv.ID.Bytes) {
-			return service.Detail(service.ErrInvalidInput, "run does not belong to this conversation")
-		}
-		switch run.Status {
-		case "suspended":
-			return nil
-		case "running":
-			if time.Now().After(deadline) {
-				return service.Detail(service.ErrConflict, "run did not suspend in time; try again")
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(resumeWaitInterval):
-			}
-		default:
-			// complete / error / cancelled — already terminal.
-			return service.Detail(service.ErrConflict, "run already finished; nothing to confirm")
-		}
-	}
-}
+type PromptInput = systemchat.PromptInput
 
 // RunPrompt creates the run row, hands off the chat to a background
 // goroutine, and returns the new run id immediately. The HTTP handler
@@ -121,7 +65,7 @@ func (s *Service) RunPrompt(ctx context.Context, p authz.Principal, conversation
 	return runID, nil
 }
 
-// RunPromptInline is RunPrompt's synchronous sibling: the chat loop
+// RunPromptInline runs the chat loop synchronously: it
 // runs on the caller's goroutine, and an additional eventstream.Sink
 // is fanned every bus event alongside the WS pubsubSink. Used by the
 // bridge path so a system-bridge poller can block on a turn (its
@@ -159,153 +103,25 @@ func (s *Service) RunPromptInline(ctx context.Context, p authz.Principal, conver
 	return runID, nil
 }
 
-// envFor builds the per-turn <env> context for a sysagent run. Platform is
-// passed in explicitly (never inferred); the user is resolved fail-soft — a
-// lookup miss just omits the User line rather than blocking the run.
-func (s *Service) envFor(ctx context.Context, userID uuid.UUID, platform string, conversationID uuid.UUID) promptEnv {
+// envFor builds display context from the service's live user projection.
+func (s *Service) envFor(ctx context.Context, p authz.Principal, platform string, conversationID uuid.UUID) (promptEnv, error) {
 	env := promptEnv{
 		Date:         time.Now().Format("2006-01-02"),
 		Platform:     platform,
 		Conversation: conversationID.String(),
 		WebURL:       strings.TrimRight(s.publicURL, "/"),
 	}
-	if userID != uuid.Nil {
-		q := dbq.New(s.db.Pool())
-		if u, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: userID, Valid: true}); err == nil {
-			env.UserName, env.UserEmail = u.DisplayName, u.Email
-		} else {
-			s.logger.Warn("sysagent env: resolve user failed", zap.String("user_id", userID.String()), zap.Error(err))
-		}
+	u, err := s.domain.User(ctx, p)
+	if err != nil {
+		return promptEnv{}, err
 	}
-	return env
+	env.UserName, env.UserEmail = u.DisplayName, u.Email
+	return env, nil
 }
 
-// startRun is the shared prep used by RunPrompt and RunPromptInline:
-// load + ownership-check the conversation, do the resume-race wait if
-// this is a confirmation reply, rename a first-message conversation,
-// systemTriggerType classifies what initiated a sysagent turn, for the
-// activity view's Trigger column. Values mirror the agent runs taxonomy so the
-// two tables read the same: "prompt" for the web chat, "bridge" for a Telegram
-// DM. An auto-resume turn (no operator message and no approve/deny — the server
-// injected a completion notice and asked the LLM to react) is an "event", which
-// has no agent-run analog.
-func systemTriggerType(input PromptInput) string {
-	if input.Message == "" && input.Approved == nil {
-		return "event"
-	}
-	if input.Platform == "web" {
-		return "prompt"
-	}
-	return "bridge"
-}
-
-// and insert the system_runs row. The actual chat goroutine /
-// inline loop is up to the caller.
+// startRun delegates durable admission; sysagent owns only runtime dispatch.
 func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationID uuid.UUID, input PromptInput) (uuid.UUID, dbq.SystemConversation, error) {
-	if !p.IsAuthenticatedUser() {
-		return uuid.Nil, dbq.SystemConversation{}, service.ErrUnauthorized
-	}
-	q := dbq.New(s.db.Pool())
-	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
-	if err != nil {
-		return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
-	}
-	if uuid.UUID(conversation.UserID.Bytes) != p.UserID {
-		return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
-	}
-	var resumeRunID uuid.UUID
-	if input.Approved != nil && input.ResumeRunID == "" {
-		return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrInvalidInput, "resume_run_id is required for a confirmation response")
-	}
-	if input.ResumeRunID != "" {
-		resumeRunID, err = uuid.Parse(input.ResumeRunID)
-		if err != nil {
-			return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrInvalidInput, "invalid resume_run_id")
-		}
-		if err := s.awaitSuspendedSystemRun(ctx, q, resumeRunID, conversation); err != nil {
-			return uuid.Nil, dbq.SystemConversation{}, err
-		}
-	}
-
-	tx, err := s.db.Pool().Begin(ctx)
-	if err != nil {
-		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("begin system run: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	qtx := q.WithTx(tx)
-	conversation, err = qtx.GetSystemConversationByIDForUpdate(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
-		}
-		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("lock system conversation: %w", err)
-	}
-	if uuid.UUID(conversation.UserID.Bytes) != p.UserID {
-		return uuid.Nil, dbq.SystemConversation{}, service.ErrNotFound
-	}
-
-	resolving := input.Approved != nil || (input.Message != "" && conversation.Status == "awaiting_confirmation")
-	if resolving {
-		if resumeRunID == uuid.Nil {
-			return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "resume_run_id is required for the pending confirmation")
-		}
-		if conversation.Status != "awaiting_confirmation" || !conversation.SuspendedRunID.Valid || uuid.UUID(conversation.SuspendedRunID.Bytes) != resumeRunID {
-			return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "confirmation is stale or has already been resolved")
-		}
-		resolved, rerr := qtx.ResolveSuspendedSystemRun(ctx, dbq.ResolveSuspendedSystemRunParams{
-			ID:             pgtype.UUID{Bytes: resumeRunID, Valid: true},
-			ConversationID: conversation.ID,
-		})
-		if rerr != nil {
-			return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("resolve suspended system run: %w", rerr)
-		}
-		if resolved != 1 {
-			return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "confirmation is stale or has already been resolved")
-		}
-		claimed, cerr := qtx.ClaimSystemConversationCheckpoint(ctx, dbq.ClaimSystemConversationCheckpointParams{
-			ID:             conversation.ID,
-			SuspendedRunID: pgtype.UUID{Bytes: resumeRunID, Valid: true},
-		})
-		if cerr != nil {
-			return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("claim system conversation checkpoint: %w", cerr)
-		}
-		if claimed != 1 {
-			return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "confirmation is stale or has already been resolved")
-		}
-	} else if conversation.Status != "active" {
-		return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "conversation is awaiting confirmation")
-	} else if resumeRunID != uuid.Nil {
-		return uuid.Nil, dbq.SystemConversation{}, service.Detail(service.ErrConflict, "confirmation is stale or has already been resolved")
-	}
-
-	if input.Message != "" && conversation.Title == defaultConversationTitle {
-		newTitle := truncate(input.Message, 100)
-		if newTitle != "" && newTitle != conversation.Title {
-			if err := qtx.RenameSystemConversation(ctx, dbq.RenameSystemConversationParams{
-				ID:     conversation.ID,
-				UserID: pgtype.UUID{Bytes: p.UserID, Valid: true},
-				Title:  newTitle,
-			}); err != nil {
-				s.logger.Warn("sysagent: rename conversation on first message failed",
-					zap.Stringer("conversation", uuid.UUID(conversation.ID.Bytes)),
-					zap.Error(err))
-			} else {
-				conversation.Title = newTitle
-			}
-		}
-	}
-	run, err := qtx.CreateSystemRun(ctx, dbq.CreateSystemRunParams{
-		ConversationID: conversation.ID,
-		UserID:         pgtype.UUID{Bytes: p.UserID, Valid: true},
-		TriggerType:    systemTriggerType(input),
-	})
-	if err != nil {
-		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("create system run: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, dbq.SystemConversation{}, fmt.Errorf("commit system run: %w", err)
-	}
-	return uuid.UUID(run.ID.Bytes), conversation, nil
+	return s.domain.StartRun(ctx, p, conversationID, input)
 }
 
 // runChat is the chat-loop goroutine RunPrompt kicks off. Owns the
@@ -325,6 +141,19 @@ func (s *Service) startRun(ctx context.Context, p authz.Principal, conversationI
 // pure noise to other devices and risks leaking a tool-call/result
 // stream to anyone else subscribed to the user's topic.
 func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation dbq.SystemConversation, runID uuid.UUID, input PromptInput, extraSink eventstream.Sink) {
+	userID := p.UserID
+	var err error
+	p, err = s.domain.RunPrincipal(ctx, runID)
+	if err != nil {
+		s.finishRun(ctx, runID, "error", err.Error())
+		if extraSink == nil {
+			s.publishRunError(uuid.UUID(conversation.ID.Bytes), runID, userID, err.Error())
+		}
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go s.domain.ObserveRun(ctx, p, runID, cancel)
 	conversationID := uuid.UUID(conversation.ID.Bytes)
 	bridgeMode := extraSink != nil
 
@@ -353,7 +182,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		s.publishRunError(conversationID, runID, p.UserID, "no system-default LLM configured: "+err.Error())
 		return
 	}
-	settings, err := dbq.New(s.db.Pool()).GetSystemSettings(ctx)
+	settings, err := s.domain.Settings(ctx, p)
 	if err != nil {
 		s.finishRun(ctx, runID, "error", "load system locale: "+err.Error())
 		s.publishRunError(conversationID, runID, p.UserID, "load system locale: "+err.Error())
@@ -364,16 +193,31 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// wrap in the gated executor so destructive tools route through
 	// PermissionManager.Ask (which raises ErrPermissionNeeded → sol
 	// suspends the run).
-	tools := s.buildToolSet(p)
+	tools := s.buildToolSet(ctx, dbq.New(s.db.Pool()), p)
 	baseExec := tool.NewLocalExecutor(tools, nil)
 	exec := newGatedExecutor(baseExec)
 
-	store := newSessionStore(s.db, conversationID, runID)
+	store, err := s.domain.SessionStore(ctx, p, conversationID, runID)
+	if err != nil {
+		s.finishRun(ctx, runID, "error", err.Error())
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		}
+		return
+	}
 
+	env, err := s.envFor(ctx, p, systemchat.Platform(p), conversationID)
+	if err != nil {
+		s.finishRun(ctx, runID, "error", err.Error())
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		}
+		return
+	}
 	solAgent := &agent.Agent{
 		Name:         "sysagent",
 		Model:        resolved.ProviderCatalogID + "/" + resolved.ModelName,
-		SystemPrompt: humanFacingSystemPrompt(s.envFor(ctx, p.UserID, input.Platform, conversationID), tools, settings.UiLocale),
+		SystemPrompt: humanFacingSystemPrompt(env, tools, settings.UiLocale),
 		Tools:        tools,
 		MaxSteps:     25,
 	}
@@ -388,6 +232,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 		Bus:                       runBus,
 		SessionStore:              store,
 		Executor:                  exec,
+		ToolCallExecutionMode:     stream.ToolCallExecutionSync,
 		Quiet:                     true, // no stdout chatter — events flow through the sink
 	})
 
@@ -396,7 +241,17 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// extra plumbing argument. The conversation id is what build-mutating
 	// tools (trigger_agent_upgrade, rollback_agent) pass into the
 	// builder so the post-build notification routes back here.
-	turnCtx := withConversationID(withPrincipal(ctx, p), conversationID)
+	turnCtx := withConversationID(withPrincipal(ctx, p, dbq.New(s.db.Pool()), func(ctx context.Context) error {
+		return s.domain.CheckRun(ctx, p, runID)
+	}), conversationID)
+	turnCtx, err = s.domain.RunContext(turnCtx, p, runID)
+	if err != nil {
+		s.finishRun(ctx, runID, "error", err.Error())
+		if !bridgeMode {
+			s.publishRunError(conversationID, runID, p.UserID, err.Error())
+		}
+		return
+	}
 
 	var result *sol.RunResult
 	switch {
@@ -434,7 +289,7 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 	// Record model spend whenever Sol produced a result. Failed and cancelled
 	// turns can still contain completed provider usage.
 	if result != nil {
-		s.recordSystemRunUsage(runID, p.UserID, resolved.ProviderCatalogID, resolved.ProviderSlug, resolved.ModelName, result.Usage, result.Status == sol.RunFailed)
+		s.domain.RecordSystemRunUsage(runID, p.UserID, resolved.ProviderCatalogID, resolved.ProviderSlug, resolved.ModelName, result.Usage, result.Status == sol.RunFailed)
 	}
 
 	if err != nil {
@@ -490,9 +345,11 @@ func (s *Service) runChat(ctx context.Context, p authz.Principal, conversation d
 			s.publishRunComplete(conversationID, runID, p.UserID, result.Usage)
 		}
 
-	case sol.RunFailed:
+	case sol.RunFailed, sol.RunStepLimitReached:
 		errMsg := ""
-		if result.Error != nil {
+		if result.Status == sol.RunStepLimitReached {
+			errMsg = "sol run step limit reached before completion"
+		} else if result.Error != nil {
 			errMsg = result.Error.Error()
 		}
 		s.finishRun(ctx, runID, "error", errMsg)
@@ -602,53 +459,11 @@ func (s *Service) persistSuspension(ctx context.Context, conversationID, runID u
 	if err != nil {
 		return fmt.Errorf("marshal suspension context: %w", err)
 	}
-	tx, err := s.db.Pool().Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin suspension persistence: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := dbq.New(s.db.Pool()).WithTx(tx)
-	conversation, err := q.GetSystemConversationByIDForUpdate(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
-	if err != nil {
-		return fmt.Errorf("lock conversation for suspension: %w", err)
-	}
-	if conversation.Status != "active" {
-		return service.Detail(service.ErrConflict, "conversation already has a pending confirmation")
-	}
-	suspended, err := q.SuspendSystemRun(ctx, dbq.SuspendSystemRunParams{
-		ID:             pgtype.UUID{Bytes: runID, Valid: true},
-		ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
-	})
-	if err != nil {
-		return fmt.Errorf("suspend system run: %w", err)
-	}
-	if suspended != 1 {
-		return service.Detail(service.ErrConflict, "system run is not running")
-	}
-	set, err := q.SetSystemConversationCheckpoint(ctx, dbq.SetSystemConversationCheckpointParams{
-		ID:             pgtype.UUID{Bytes: conversationID, Valid: true},
-		Checkpoint:     b,
-		SuspendedRunID: pgtype.UUID{Bytes: runID, Valid: true},
-	})
-	if err != nil {
-		return fmt.Errorf("bind suspension checkpoint: %w", err)
-	}
-	if set != 1 {
-		return service.Detail(service.ErrConflict, "conversation checkpoint could not be bound")
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit suspension persistence: %w", err)
-	}
-	return nil
+	return s.domain.PersistSuspension(ctx, conversationID, runID, b)
 }
 
 func (s *Service) finishRun(ctx context.Context, runID uuid.UUID, status, errMsg string) {
-	q := dbq.New(s.db.Pool())
-	if err := q.UpdateSystemRunStatus(ctx, dbq.UpdateSystemRunStatusParams{
-		ID:           pgtype.UUID{Bytes: runID, Valid: true},
-		Status:       status,
-		ErrorMessage: errMsg,
-	}); err != nil {
+	if err := s.domain.FinishRun(context.WithoutCancel(ctx), runID, status, errMsg); err != nil {
 		s.logger.Error("sysagent: update run status failed",
 			zap.Stringer("run", runID), zap.String("status", status), zap.Error(err))
 	}

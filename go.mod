@@ -16,6 +16,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	github.com/trustelem/zxcvbn v1.0.1
@@ -34,15 +35,12 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dlclark/regexp2 v1.11.4 // indirect
-	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-webauthn/x v0.2.6 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
@@ -77,9 +75,9 @@ require (
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/airlockrun/agentsdk v0.6.1
-	github.com/airlockrun/goai v0.1.6
-	github.com/airlockrun/sol v0.1.9
+	github.com/airlockrun/agentsdk v0.7.0-rc.1
+	github.com/airlockrun/goai v0.1.8
+	github.com/airlockrun/sol v0.1.11
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.18 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect

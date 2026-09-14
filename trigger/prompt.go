@@ -15,15 +15,17 @@ import (
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/audio"
+	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
-	promptpkg "github.com/airlockrun/airlock/prompt"
+	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/bridgeevents"
+	"github.com/airlockrun/airlock/service/execution"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/model"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
@@ -40,7 +42,7 @@ type PromptProxy struct {
 
 type promptDispatcher interface {
 	RunCanceler
-	ForwardPrompt(context.Context, uuid.UUID, wire.PromptInput, *uuid.UUID, *uuid.UUID) (io.ReadCloser, uuid.UUID, error)
+	ForwardPrompt(context.Context, authz.Principal, uuid.UUID, wire.PromptInput) (io.ReadCloser, uuid.UUID, error)
 }
 
 // NewPromptProxy creates a PromptProxy. The resolver is invoked to obtain the
@@ -76,6 +78,11 @@ func (p *PromptProxy) HandleMessage(
 	events chan<- ResponseEvent,
 ) (string, error) {
 	q := dbq.New(p.db.Pool())
+	principal, err := bridgeevents.AdmitPrompt(ctx, q, agentID, bridgeID, userID, externalID)
+	if err != nil {
+		close(events)
+		return "", err
+	}
 
 	// Slash commands operate on whatever conversation already exists —
 	// they never need to create one.
@@ -89,10 +96,11 @@ func (p *PromptProxy) HandleMessage(
 		// If the user has no conversation yet, the command runs against an
 		// invalid convID and individual handlers reply with a "Nothing to …"
 		// message.
-		if conv, err := q.GetConversationBySource(ctx, dbq.GetConversationBySourceParams{
-			AgentID: toPgUUID(agentID),
-			UserID:  toPgUUID(userID),
-			Source:  "bridge",
+		if conv, err := q.GetBridgeConversation(ctx, dbq.GetBridgeConversationParams{
+			AgentID:    toPgUUID(agentID),
+			UserID:     toPgUUID(userID),
+			BridgeID:   toPgUUID(bridgeID),
+			ExternalID: pgtype.Text{String: externalID, Valid: true},
 		}); err == nil {
 			conversationID = conv.ID
 		}
@@ -127,7 +135,11 @@ func (p *PromptProxy) HandleMessage(
 	// Resolve access once — reused for slash-command gating and for
 	// filtering per-caller instructions. Non-members fall through to
 	// AccessPublic.
-	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
+	access, err := execution.Access(ctx, q, principal, agentID)
+	if err != nil {
+		close(events)
+		return "", err
+	}
 
 	// Intercept slash commands (/clear, /compact, ...) before forwarding.
 	// `/clear` and unknown commands return a reply directly so the bridge
@@ -194,14 +206,6 @@ func (p *PromptProxy) HandleMessage(
 			zap.Error(err))
 	}
 
-	// Resolve access-filtered instruction fragments. Failure to load
-	// the agent row is non-fatal — we just skip extras rather than blocking
-	// the whole prompt.
-	var instructions string
-	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
-		instructions = promptpkg.RenderInstructions(ag.Instructions, access)
-	}
-
 	// Forward to agent container — SessionStore handles message loading and persistence.
 	// CallerAccess is required for the agent's bind-time gating (admin-only
 	// JS bindings like requestUpgrade, queryDB). Web path does the
@@ -212,7 +216,6 @@ func (p *PromptProxy) HandleMessage(
 		Message:        userMessage,
 		ConversationID: convert.PgUUIDToString(conversationID),
 		Files:          fileInfos,
-		Instructions:   instructions,
 		ForceCompact:   forceCompact,
 		CallerAccess:   wire.Access(access),
 		// Public-tier callers get a typed-tool surface (no JS sandbox, no
@@ -225,28 +228,7 @@ func (p *PromptProxy) HandleMessage(
 		input.Message = ""
 	}
 
-	// If there's a suspended run (pending permission check), a free-text message
-	// claims it as denied and is re-reasoned in the same run.
-	// Conversation-scoped so a bridge message never resolves a sibling-
-	// delegated (source='a2a') suspension that belongs to another surface.
-	if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convert.PgUUIDToString(conversationID)); err == nil {
-		resolved, rerr := q.ResolveSuspendedRun(ctx, suspendedRun.ID)
-		if rerr != nil {
-			close(events)
-			return "", fmt.Errorf("auto-deny suspended run: %w", rerr)
-		}
-		if resolved == 1 {
-			input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
-			approved := false
-			input.Approved = &approved
-		}
-	}
-
-	var userIDPtr *uuid.UUID
-	if userID != uuid.Nil {
-		userIDPtr = &userID
-	}
-	rc, runID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
+	rc, runID, err := p.dispatcher.ForwardPrompt(ctx, principal, agentID, input)
 	if err != nil {
 		if msg, ok := notRunnableBridgeReply(err); ok {
 			events <- ResponseEvent{Type: "text-delta", Text: msg}
@@ -284,6 +266,11 @@ func (p *PromptProxy) HandleCallback(
 	events chan<- ResponseEvent,
 ) (staleRun bool, err error) {
 	q := dbq.New(p.db.Pool())
+	principal, err := bridgeevents.AdmitPrompt(ctx, q, agentID, bridgeID, userID, externalID)
+	if err != nil {
+		close(events)
+		return false, err
+	}
 
 	action, runIDStr, ok := parseCallbackData(data)
 	if !ok {
@@ -296,53 +283,19 @@ func (p *PromptProxy) HandleCallback(
 		return false, fmt.Errorf("invalid run id in callback: %w", err)
 	}
 
-	run, err := q.GetSuspendedRunByID(ctx, toPgUUID(runID))
+	convID, err := execution.ResumeConversation(ctx, q, principal, agentID, runID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return staleCallback(events)
-		}
-		close(events)
-		return false, fmt.Errorf("get suspended run: %w", err)
-	}
-	if uuid.UUID(run.AgentID.Bytes) != agentID ||
-		run.TriggerType != "prompt" ||
-		!run.BridgeID.Valid || uuid.UUID(run.BridgeID.Bytes) != bridgeID {
-		return staleCallback(events)
-	}
-	convID, err := uuid.Parse(run.TriggerRef)
-	if err != nil {
-		close(events)
-		return false, fmt.Errorf("invalid suspended run conversation reference: %w", err)
-	}
-	conv, err := q.GetConversationByID(ctx, toPgUUID(convID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return staleCallback(events)
-		}
-		close(events)
-		return false, fmt.Errorf("get suspended run conversation: %w", err)
-	}
-	if uuid.UUID(conv.AgentID.Bytes) != agentID ||
-		conv.Source != "bridge" ||
-		!conv.BridgeID.Valid || uuid.UUID(conv.BridgeID.Bytes) != bridgeID ||
-		!conv.ExternalID.Valid || conv.ExternalID.String != externalID ||
-		!conv.UserID.Valid || uuid.UUID(conv.UserID.Bytes) != userID {
-		return staleCallback(events)
-	}
-
-	resolved, err := q.ResolveSuspendedRun(ctx, run.ID)
-	if err != nil {
-		close(events)
-		return false, fmt.Errorf("resolve suspended run: %w", err)
-	}
-	if resolved != 1 {
 		return staleCallback(events)
 	}
 
 	approved := action == "approve"
 	// Same CallerAccess plumbing as HandleMessage above — admin-only
 	// bindings need it to survive the resume turn too.
-	access := bridgePrincipal(userID).EffectiveAgentAccess(ctx, q, agentID)
+	access, err := execution.Access(ctx, q, principal, agentID)
+	if err != nil {
+		close(events)
+		return false, err
+	}
 	input := wire.PromptInput{
 		ConversationID: convID.String(),
 		ResumeRunID:    runIDStr,
@@ -355,12 +308,11 @@ func (p *PromptProxy) HandleCallback(
 		input.Message = "Rejected by user."
 	}
 
-	var userIDPtr *uuid.UUID
-	if userID != uuid.Nil {
-		userIDPtr = &userID
-	}
-	rc, newRunID, err := p.dispatcher.ForwardPrompt(ctx, agentID, input, &bridgeID, userIDPtr)
+	rc, newRunID, err := p.dispatcher.ForwardPrompt(ctx, principal, agentID, input)
 	if err != nil {
+		if errors.Is(err, service.ErrConflict) || errors.Is(err, service.ErrForbidden) {
+			return staleCallback(events)
+		}
 		if msg, ok := notRunnableBridgeReply(err); ok {
 			events <- ResponseEvent{Type: "text-delta", Text: msg}
 			close(events)

@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -67,6 +68,32 @@ func ResolveForStorage(ctx context.Context, s3 *storage.S3Client, agentID uuid.U
 	for i := range msgs {
 		for j := range msgs[i].Parts {
 			p := &msgs[i].Parts[j]
+			if p.Tool != nil && p.Tool.OutputType == "content" {
+				var items []message.ToolContentItem
+				if err := json.Unmarshal([]byte(p.Tool.Output), &items); err != nil {
+					return err
+				}
+				for k := range items {
+					item := &items[k]
+					if item.Type != "image-data" && item.Type != "file-data" {
+						continue
+					}
+					if key, ok := strings.CutPrefix(item.Data, Sentinel); ok {
+						_, mime, err := canonicalize(ctx, s3, agentID, key, item.MediaType)
+						if err != nil {
+							return err
+						}
+						if mime != "" {
+							item.MediaType = mime
+						}
+					}
+				}
+				encoded, err := json.Marshal(items)
+				if err != nil {
+					return err
+				}
+				p.Tool.Output = string(encoded)
+			}
 			if p.Type != "file" || p.File == nil {
 				continue
 			}
@@ -98,6 +125,75 @@ func ResolveForStorage(ctx context.Context, s3 *storage.S3Client, agentID uuid.U
 //
 // Mutates msgs in place.
 func ResolveForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, agentID uuid.UUID, policy solprovider.AttachmentPolicy, msgs []message.Message) error {
+	// Tool-result media participates in the same request-wide materialization
+	// budget. Temporary file parts are removed before returning to the provider.
+	type nestedRef struct{ message, tool, item, file int }
+	var nested []nestedRef
+	sizes := make([]int, len(msgs))
+	for mi := range msgs {
+		sizes[mi] = len(msgs[mi].Content.Parts)
+		for pi, part := range msgs[mi].Content.Parts {
+			tr, ok := part.(message.ToolResultPart)
+			if !ok {
+				continue
+			}
+			output, ok := tr.Output.(message.ContentOutput)
+			if !ok {
+				continue
+			}
+			for ci, item := range output.Value {
+				if (item.Type != "image-data" && item.Type != "file-data") || !strings.HasPrefix(item.Data, Sentinel) {
+					continue
+				}
+				mime := item.MediaType
+				if mime == "" && item.Type == "image-data" {
+					mime = "image/png"
+				}
+				nested = append(nested, nestedRef{mi, pi, ci, len(msgs[mi].Content.Parts)})
+				msgs[mi].Content.Parts = append(msgs[mi].Content.Parts, message.FilePart{Data: message.FileDataBytes{Data: item.Data}, MimeType: mime, Filename: item.Filename})
+			}
+		}
+	}
+	defer func() {
+		for i, size := range sizes {
+			msgs[i].Content.Parts = msgs[i].Content.Parts[:size]
+		}
+	}()
+	if err := resolveFilePartsForLLM(ctx, s3, q, agentID, policy, msgs); err != nil {
+		return err
+	}
+	for _, ref := range nested {
+		tr := msgs[ref.message].Content.Parts[ref.tool].(message.ToolResultPart)
+		output := tr.Output.(message.ContentOutput)
+		var item message.ToolContentItem
+		switch part := msgs[ref.message].Content.Parts[ref.file].(type) {
+		case message.TextPart:
+			item = message.ToolContentItem{Type: "text", Text: part.Text}
+		case message.FilePart:
+			kind := "file"
+			if strings.HasPrefix(part.MimeType, "image/") {
+				kind = "image"
+			}
+			item = message.ToolContentItem{MediaType: part.MimeType, Filename: part.Filename}
+			switch data := part.Data.(type) {
+			case message.FileDataBytes:
+				item.Type, item.Data = kind+"-data", data.Data
+			case message.FileDataURL:
+				item.Type, item.URL = kind+"-url", data.URL
+			default:
+				return errors.New("attachref: unsupported resolved tool attachment")
+			}
+		default:
+			return errors.New("attachref: unsupported resolved tool part")
+		}
+		output.Value[ref.item] = item
+		tr.Output = output
+		msgs[ref.message].Content.Parts[ref.tool] = tr
+	}
+	return nil
+}
+
+func resolveFilePartsForLLM(ctx context.Context, s3 *storage.S3Client, q *dbq.Queries, agentID uuid.UUID, policy solprovider.AttachmentPolicy, msgs []message.Message) error {
 	// Collect every s3ref-bearing image/file part with its position so we
 	// can (a) canonicalize, (b) apply policy, (c) evict if over cap. We
 	// index parts by (message index, part index) because message.Parts

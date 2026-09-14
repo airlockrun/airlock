@@ -40,20 +40,22 @@ func (q *Queries) ConversationHasToolCall(ctx context.Context, arg ConversationH
 }
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO agent_messages (conversation_id, role, content, parts, cost_estimate, run_id, source, ephemeral, file_keys)
-VALUES ($1, $2, $3, $4, COALESCE($5, 0), $6, COALESCE(NULLIF($7, ''), 'user'), $8, '{}'::text[])
-RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at
+INSERT INTO agent_messages (conversation_id, role, content, parts, cost_estimate, run_id, source, ephemeral, file_keys, context_tokens_in, context_tokens_out)
+VALUES ($1, $2, $3, $4, COALESCE($5, 0), $6, COALESCE(NULLIF($7, ''), 'user'), $8, '{}'::text[], $9, $10)
+RETURNING id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out
 `
 
 type CreateMessageParams struct {
-	ConversationID pgtype.UUID `json:"conversation_id"`
-	Role           string      `json:"role"`
-	Content        string      `json:"content"`
-	Parts          []byte      `json:"parts"`
-	CostEstimate   interface{} `json:"cost_estimate"`
-	RunID          pgtype.UUID `json:"run_id"`
-	Source         interface{} `json:"source"`
-	Ephemeral      bool        `json:"ephemeral"`
+	ConversationID   pgtype.UUID `json:"conversation_id"`
+	Role             string      `json:"role"`
+	Content          string      `json:"content"`
+	Parts            []byte      `json:"parts"`
+	CostEstimate     interface{} `json:"cost_estimate"`
+	RunID            pgtype.UUID `json:"run_id"`
+	Source           interface{} `json:"source"`
+	Ephemeral        bool        `json:"ephemeral"`
+	ContextTokensIn  pgtype.Int8 `json:"context_tokens_in"`
+	ContextTokensOut pgtype.Int8 `json:"context_tokens_out"`
 }
 
 // file_keys starts as an empty text[]; the chat upload path that needs
@@ -69,6 +71,8 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (A
 		arg.RunID,
 		arg.Source,
 		arg.Ephemeral,
+		arg.ContextTokensIn,
+		arg.ContextTokensOut,
 	)
 	var i AgentMessage
 	err := row.Scan(
@@ -84,6 +88,8 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (A
 		&i.CostEstimate,
 		&i.Ephemeral,
 		&i.CreatedAt,
+		&i.ContextTokensIn,
+		&i.ContextTokensOut,
 	)
 	return i, err
 }
@@ -142,7 +148,7 @@ func (q *Queries) GetSessionContextRevision(ctx context.Context, id pgtype.UUID)
 }
 
 const listAllMessagesByConversation = `-- name: ListAllMessagesByConversation :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM agent_messages
 WHERE conversation_id = $1
 ORDER BY
   COALESCE(MIN(seq) FILTER (WHERE run_id IS NOT NULL) OVER (PARTITION BY run_id), seq) ASC,
@@ -175,6 +181,8 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}
@@ -187,8 +195,8 @@ func (q *Queries) ListAllMessagesByConversation(ctx context.Context, conversatio
 }
 
 const listMessagesBackward = `-- name: ListMessagesBackward :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM agent_messages
     WHERE conversation_id = $1
       AND source <> 'compaction'
       AND seq < $2
@@ -229,6 +237,8 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}
@@ -241,8 +251,8 @@ func (q *Queries) ListMessagesBackward(ctx context.Context, arg ListMessagesBack
 }
 
 const listMessagesByConversation = `-- name: ListMessagesByConversation :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM (
-    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM (
+    SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM agent_messages
     WHERE conversation_id = $1
       AND source <> 'compaction'
     ORDER BY seq DESC
@@ -280,6 +290,8 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}
@@ -292,7 +304,7 @@ func (q *Queries) ListMessagesByConversation(ctx context.Context, conversationID
 }
 
 const listMessagesByRun = `-- name: ListMessagesByRun :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM agent_messages
 WHERE run_id = $1
 ORDER BY seq ASC
 `
@@ -319,6 +331,8 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}
@@ -331,7 +345,7 @@ func (q *Queries) ListMessagesByRun(ctx context.Context, runID pgtype.UUID) ([]A
 }
 
 const listMessagesForward = `-- name: ListMessagesForward :many
-SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at FROM agent_messages
+SELECT id, seq, conversation_id, run_id, role, source, content, parts, file_keys, cost_estimate, ephemeral, created_at, context_tokens_in, context_tokens_out FROM agent_messages
 WHERE conversation_id = $1
   AND source <> 'compaction'
   AND seq > $2
@@ -370,6 +384,8 @@ func (q *Queries) ListMessagesForward(ctx context.Context, arg ListMessagesForwa
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}
@@ -433,7 +449,7 @@ func (q *Queries) ListOrphanToolCallsByRun(ctx context.Context, runID pgtype.UUI
 }
 
 const listSessionMessagesByConversation = `-- name: ListSessionMessagesByConversation :many
-SELECT m.id, m.seq, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.cost_estimate, m.ephemeral, m.created_at FROM agent_messages m
+SELECT m.id, m.seq, m.conversation_id, m.run_id, m.role, m.source, m.content, m.parts, m.file_keys, m.cost_estimate, m.ephemeral, m.created_at, m.context_tokens_in, m.context_tokens_out FROM agent_messages m
 JOIN agent_conversations c ON c.id = m.conversation_id
 WHERE m.conversation_id = $1
   AND NOT m.ephemeral
@@ -473,6 +489,8 @@ func (q *Queries) ListSessionMessagesByConversation(ctx context.Context, convers
 			&i.CostEstimate,
 			&i.Ephemeral,
 			&i.CreatedAt,
+			&i.ContextTokensIn,
+			&i.ContextTokensOut,
 		); err != nil {
 			return nil, err
 		}

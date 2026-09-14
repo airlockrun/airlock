@@ -22,34 +22,20 @@ var protoMarshal = protojson.MarshalOptions{
 // started on X. Pre-existing system-level broadcasts leave it empty
 // and fall through to the "deliver to every subscriber on the topic"
 // behaviour. ConversationID lets the frontend route an event to the
-// correct chat card without payload introspection. Subagent tags an
-// envelope as a sub-run event so the chat store can render it
-// underneath the parent run's tool-call instead of as a top-level
-// message.
+// correct chat card without payload introspection.
 type Envelope struct {
 	Type      string `json:"type"`
 	RequestID string `json:"requestId,omitempty"`
 	TopicID   string `json:"topicId,omitempty"`
 	UserID    string `json:"userId,omitempty"`
-	// Seq is a hub-global monotonic sequence stamped at publish. The
-	// client keeps the max seq it has processed and presents it as
-	// ?since= on (re)connect; the hub replays only seq>since per topic,
-	// or sends a `resync` when the gap is wider than the buffer. Opaque
-	// to the client ("bigger = newer"); when realtime moves to a shared
-	// bus the source changes without touching the wire contract.
+	// Seq is a commit-ordered database sequence for shared PubSub (hub-local
+	// for NewPubSub). Direct state-versioned job broadcasts leave it zero. The
+	// client keeps each topic's max seq and presents the lowest watermark
+	// as ?since= on reconnect; the hub replays only seq>since per topic,
+	// or sends a `resync` when the gap is wider than the retained window.
 	Seq            uint64          `json:"seq,omitempty"`
 	ConversationID string          `json:"conversationId,omitempty"`
-	Subagent       *SubagentInfo   `json:"subagent,omitempty"`
 	Payload        json.RawMessage `json:"payload,omitempty"`
-}
-
-// SubagentInfo identifies a sub-run when an A2A child agent's events
-// are mirrored to the parent's topic. Frontend chat-store reads it to
-// attach the event to the parent run's active tool-call card.
-type SubagentInfo struct {
-	AgentID string `json:"agentId"`
-	RunID   string `json:"runId"`
-	Slug    string `json:"slug,omitempty"`
 }
 
 // NewEnvelope creates an Envelope, marshaling the payload via protojson.
@@ -81,13 +67,6 @@ func NewEnvelopeForUser(eventType, topicID, userID, conversationID string, paylo
 	env.UserID = userID
 	env.ConversationID = conversationID
 	return env
-}
-
-// WithSubagent tags the envelope as a sub-run event and returns it.
-// Chainable on the constructors above.
-func (e Envelope) WithSubagent(info SubagentInfo) Envelope {
-	e.Subagent = &info
-	return e
 }
 
 func errorEnvelope(requestID, msg string) Envelope {

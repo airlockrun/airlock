@@ -62,8 +62,8 @@ func codegenIntegrationAuth(database *db.DB) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, err := auth.BearerToken(r.Header.Get("Authorization"))
-			if err != nil {
+			token, supplied, err := auth.RequestBearerToken(r)
+			if err != nil || !supplied {
 				writeServiceError(w, service.ErrUnauthorized, "integration authentication failed")
 				return
 			}

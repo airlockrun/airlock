@@ -20,7 +20,7 @@ SET status = 'cancelled',
     updated_at = now(),
     state_version = state_version + 1
 WHERE id = $2 AND agent_id = $3 AND status = 'queued'
-RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at
+RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id
 `
 
 type CancelQueuedAgentJobParams struct {
@@ -69,6 +69,7 @@ func (q *Queries) CancelQueuedAgentJob(ctx context.Context, arg CancelQueuedAgen
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -82,7 +83,7 @@ SET status = 'cancelled',
     updated_at = now(),
     state_version = state_version + 1
 WHERE id = $2 AND status = 'running'
-RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at
+RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id
 `
 
 type CancelRunningAgentJobParams struct {
@@ -130,6 +131,7 @@ func (q *Queries) CancelRunningAgentJob(ctx context.Context, arg CancelRunningAg
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -411,7 +413,7 @@ SET status = CASE WHEN job.cancel_requested_at IS NOT NULL THEN 'cancelled' ELSE
     state_version = state_version + 1
 FROM interrupted
 WHERE job.id = interrupted.job_id
-RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at
+RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at, job.origin_id
 `
 
 type ForceInterruptAgentJobAttemptForDeploymentParams struct {
@@ -472,12 +474,13 @@ func (q *Queries) ForceInterruptAgentJobAttemptForDeployment(ctx context.Context
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const getAgentJobByAttemptRunID = `-- name: GetAgentJobByAttemptRunID :one
-SELECT j.id, j.agent_id, j.handler_name, j.handler_version, j.input_schema_hash, j.output_schema_hash, j.source_run_id, j.cron_id, j.cron_slug, j.initiator_kind, j.initiator_user_id, j.initiator_conversation_id, j.initiator_access, j.status, j.timeout_ms, j.max_attempts, j.attempt_limit, j.attempt_count, j.next_attempt_at, j.scheduled_at, j.input_payload, j.output_payload, j.progress_phase, j.progress_message, j.progress_completed, j.progress_total, j.progress_attempt, j.progress_updated_at, j.last_error, j.cancel_requested_at, j.cancelled_by_user_id, j.started_at, j.completed_at, j.state_version, j.created_at, j.updated_at
+SELECT j.id, j.agent_id, j.handler_name, j.handler_version, j.input_schema_hash, j.output_schema_hash, j.source_run_id, j.cron_id, j.cron_slug, j.initiator_kind, j.initiator_user_id, j.initiator_conversation_id, j.initiator_access, j.status, j.timeout_ms, j.max_attempts, j.attempt_limit, j.attempt_count, j.next_attempt_at, j.scheduled_at, j.input_payload, j.output_payload, j.progress_phase, j.progress_message, j.progress_completed, j.progress_total, j.progress_attempt, j.progress_updated_at, j.last_error, j.cancel_requested_at, j.cancelled_by_user_id, j.started_at, j.completed_at, j.state_version, j.created_at, j.updated_at, j.origin_id
 FROM agent_jobs j
 JOIN agent_job_attempts a ON a.job_id = j.id
 WHERE a.run_id = $1
@@ -523,12 +526,13 @@ func (q *Queries) GetAgentJobByAttemptRunID(ctx context.Context, runID pgtype.UU
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const getAgentJobByID = `-- name: GetAgentJobByID :one
-SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at FROM agent_jobs WHERE id = $1
+SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id FROM agent_jobs WHERE id = $1
 `
 
 func (q *Queries) GetAgentJobByID(ctx context.Context, id pgtype.UUID) (AgentJob, error) {
@@ -571,12 +575,13 @@ func (q *Queries) GetAgentJobByID(ctx context.Context, id pgtype.UUID) (AgentJob
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const getAgentJobByIDAndAgent = `-- name: GetAgentJobByIDAndAgent :one
-SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at FROM agent_jobs WHERE id = $1 AND agent_id = $2
+SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id FROM agent_jobs WHERE id = $1 AND agent_id = $2
 `
 
 type GetAgentJobByIDAndAgentParams struct {
@@ -624,12 +629,13 @@ func (q *Queries) GetAgentJobByIDAndAgent(ctx context.Context, arg GetAgentJobBy
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const getAgentJobByIDAndAgentForUpdate = `-- name: GetAgentJobByIDAndAgentForUpdate :one
-SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at FROM agent_jobs WHERE id = $1 AND agent_id = $2 FOR UPDATE
+SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id FROM agent_jobs WHERE id = $1 AND agent_id = $2 FOR UPDATE
 `
 
 type GetAgentJobByIDAndAgentForUpdateParams struct {
@@ -677,12 +683,13 @@ func (q *Queries) GetAgentJobByIDAndAgentForUpdate(ctx context.Context, arg GetA
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
 
 const getAgentJobByIDForUpdate = `-- name: GetAgentJobByIDForUpdate :one
-SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at FROM agent_jobs WHERE id = $1 FOR UPDATE
+SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id FROM agent_jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetAgentJobByIDForUpdate(ctx context.Context, id pgtype.UUID) (AgentJob, error) {
@@ -725,6 +732,7 @@ func (q *Queries) GetAgentJobByIDForUpdate(ctx context.Context, id pgtype.UUID) 
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -804,7 +812,7 @@ func (q *Queries) GetExpiredAgentJobAttemptForUpdate(ctx context.Context) (Agent
 }
 
 const getRunningRunForJobEnqueue = `-- name: GetRunningRunForJobEnqueue :one
-SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access
+SELECT id, agent_id, bridge_id, status, trigger_type, trigger_ref, source_ref, input_payload, actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_cost_estimate, duration_ms, stdout_log, error_message, error_kind, exit_code, panic_trace, checkpoint, compacted, started_at, finished_at, parent_run_id, llm_tokens_cached, caller_user_id, caller_conversation_id, caller_access, runtime_owner_token, origin_id, execution_kind, resume_run_id
 FROM runs
 WHERE id = $1
   AND agent_id = $2
@@ -849,6 +857,10 @@ func (q *Queries) GetRunningRunForJobEnqueue(ctx context.Context, arg GetRunning
 		&i.CallerUserID,
 		&i.CallerConversationID,
 		&i.CallerAccess,
+		&i.RuntimeOwnerToken,
+		&i.OriginID,
+		&i.ExecutionKind,
+		&i.ResumeRunID,
 	)
 	return i, err
 }
@@ -870,29 +882,29 @@ func (q *Queries) HasActiveAgentJobAttempt(ctx context.Context, jobID pgtype.UUI
 
 const insertAgentJob = `-- name: InsertAgentJob :one
 INSERT INTO agent_jobs (
-    id, agent_id, handler_name, handler_version, input_schema_hash,
+    id, agent_id, origin_id, handler_name, handler_version, input_schema_hash,
     output_schema_hash, source_run_id, cron_id, cron_slug,
     initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms,
     max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, state_version
 )
 VALUES (
-    $1, $2, $3, $4, $5,
-    $6, $7, NULL, NULL, $8, $9,
+    $1, $2, (SELECT origin_id FROM runs WHERE id = $3 AND agent_id = $2 AND status = 'running'), $4, $5, $6,
+    $7, $3, NULL, NULL, $8, $9,
     $10, $11, 'queued', $12,
     $13, $13, 0, coalesce($14, now()), $14, $15, 1
 )
 ON CONFLICT (id) DO NOTHING
-RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at
+RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id
 `
 
 type InsertAgentJobParams struct {
 	ID                      pgtype.UUID        `json:"id"`
 	AgentID                 pgtype.UUID        `json:"agent_id"`
+	SourceRunID             pgtype.UUID        `json:"source_run_id"`
 	HandlerName             string             `json:"handler_name"`
 	HandlerVersion          int32              `json:"handler_version"`
 	InputSchemaHash         string             `json:"input_schema_hash"`
 	OutputSchemaHash        string             `json:"output_schema_hash"`
-	SourceRunID             pgtype.UUID        `json:"source_run_id"`
 	InitiatorKind           string             `json:"initiator_kind"`
 	InitiatorUserID         pgtype.UUID        `json:"initiator_user_id"`
 	InitiatorConversationID pgtype.UUID        `json:"initiator_conversation_id"`
@@ -907,11 +919,11 @@ func (q *Queries) InsertAgentJob(ctx context.Context, arg InsertAgentJobParams) 
 	row := q.db.QueryRow(ctx, insertAgentJob,
 		arg.ID,
 		arg.AgentID,
+		arg.SourceRunID,
 		arg.HandlerName,
 		arg.HandlerVersion,
 		arg.InputSchemaHash,
 		arg.OutputSchemaHash,
-		arg.SourceRunID,
 		arg.InitiatorKind,
 		arg.InitiatorUserID,
 		arg.InitiatorConversationID,
@@ -959,6 +971,7 @@ func (q *Queries) InsertAgentJob(ctx context.Context, arg InsertAgentJobParams) 
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -1086,7 +1099,7 @@ func (q *Queries) ListActiveAgentJobAttempts(ctx context.Context, arg ListActive
 }
 
 const listAgentBuildBlockingJobs = `-- name: ListAgentBuildBlockingJobs :many
-SELECT job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at
+SELECT job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at, job.origin_id
 FROM agent_jobs job
 JOIN agent_builds build ON build.id = $1 AND build.agent_id = job.agent_id
 WHERE job.agent_id = $2
@@ -1169,6 +1182,7 @@ func (q *Queries) ListAgentBuildBlockingJobs(ctx context.Context, arg ListAgentB
 			&i.StateVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OriginID,
 		); err != nil {
 			return nil, err
 		}
@@ -1224,7 +1238,7 @@ func (q *Queries) ListAgentJobAttempts(ctx context.Context, jobID pgtype.UUID) (
 }
 
 const listAgentJobsByAgent = `-- name: ListAgentJobsByAgent :many
-SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at
+SELECT id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id
 FROM agent_jobs
 WHERE agent_id = $1
   AND (
@@ -1293,6 +1307,7 @@ func (q *Queries) ListAgentJobsByAgent(ctx context.Context, arg ListAgentJobsByA
 			&i.StateVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OriginID,
 		); err != nil {
 			return nil, err
 		}
@@ -1445,7 +1460,7 @@ WITH pause_time AS (
                   AND candidate.output_schema_hash = job.output_schema_hash
             )
       )
-    RETURNING agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.tools_hash, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline
+    RETURNING agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline
 ), phase AS (
     UPDATE agent_builds build
     SET deployment_phase = 'paused'
@@ -1453,7 +1468,7 @@ WITH pause_time AS (
     WHERE build.id = paused.job_dispatch_paused_build_id
     RETURNING build.id
 )
-SELECT paused.id, paused.owner_principal_id, paused.slug, paused.name, paused.description, paused.status, paused.upgrade_status, paused.auto_fix, paused.build_provider_id, paused.build_model, paused.exec_provider_id, paused.exec_model, paused.stt_provider_id, paused.stt_model, paused.vision_provider_id, paused.vision_model, paused.tts_provider_id, paused.tts_model, paused.image_gen_provider_id, paused.image_gen_model, paused.embedding_provider_id, paused.embedding_model, paused.search_provider_id, paused.search_model, paused.source_ref, paused.image_ref, paused.db_schema, paused.db_password, paused.sdk_version, paused.config, paused.instructions, paused.error_message, paused.created_at, paused.updated_at, paused.mcp_enabled, paused.allow_public_mcp, paused.allow_public_routes, paused.tools_hash, paused.emoji, paused.allow_oauth_mcp_prompt, paused.allow_public_mcp_prompt, paused.git_remote_url, paused.git_mode, paused.git_credential_id, paused.git_default_branch, paused.git_webhook_secret, paused.git_last_synced_ref, paused.agent_token_version, paused.job_dispatch_paused_build_id, paused.job_dispatch_paused_at, paused.job_dispatch_pause_deadline FROM paused JOIN phase ON true
+SELECT paused.id, paused.owner_principal_id, paused.slug, paused.name, paused.description, paused.status, paused.upgrade_status, paused.auto_fix, paused.build_provider_id, paused.build_model, paused.exec_provider_id, paused.exec_model, paused.stt_provider_id, paused.stt_model, paused.vision_provider_id, paused.vision_model, paused.tts_provider_id, paused.tts_model, paused.image_gen_provider_id, paused.image_gen_model, paused.embedding_provider_id, paused.embedding_model, paused.search_provider_id, paused.search_model, paused.source_ref, paused.image_ref, paused.db_schema, paused.db_password, paused.sdk_version, paused.config, paused.instructions, paused.error_message, paused.created_at, paused.updated_at, paused.mcp_enabled, paused.allow_public_mcp, paused.allow_public_routes, paused.emoji, paused.allow_oauth_mcp_prompt, paused.allow_public_mcp_prompt, paused.git_remote_url, paused.git_mode, paused.git_credential_id, paused.git_default_branch, paused.git_webhook_secret, paused.git_last_synced_ref, paused.agent_token_version, paused.job_dispatch_paused_build_id, paused.job_dispatch_paused_at, paused.job_dispatch_pause_deadline FROM paused JOIN phase ON true
 `
 
 type PauseAgentJobDispatchParams struct {
@@ -1500,7 +1515,6 @@ type PauseAgentJobDispatchRow struct {
 	McpEnabled               bool               `json:"mcp_enabled"`
 	AllowPublicMcp           bool               `json:"allow_public_mcp"`
 	AllowPublicRoutes        bool               `json:"allow_public_routes"`
-	ToolsHash                []byte             `json:"tools_hash"`
 	Emoji                    string             `json:"emoji"`
 	AllowOauthMcpPrompt      bool               `json:"allow_oauth_mcp_prompt"`
 	AllowPublicMcpPrompt     bool               `json:"allow_public_mcp_prompt"`
@@ -1557,7 +1571,6 @@ func (q *Queries) PauseAgentJobDispatch(ctx context.Context, arg PauseAgentJobDi
 		&i.McpEnabled,
 		&i.AllowPublicMcp,
 		&i.AllowPublicRoutes,
-		&i.ToolsHash,
 		&i.Emoji,
 		&i.AllowOauthMcpPrompt,
 		&i.AllowPublicMcpPrompt,
@@ -1647,7 +1660,7 @@ WHERE id = $2
   AND agent_id = $3
   AND status = 'running'
   AND cancel_requested_at IS NULL
-RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at
+RETURNING id, agent_id, handler_name, handler_version, input_schema_hash, output_schema_hash, source_run_id, cron_id, cron_slug, initiator_kind, initiator_user_id, initiator_conversation_id, initiator_access, status, timeout_ms, max_attempts, attempt_limit, attempt_count, next_attempt_at, scheduled_at, input_payload, output_payload, progress_phase, progress_message, progress_completed, progress_total, progress_attempt, progress_updated_at, last_error, cancel_requested_at, cancelled_by_user_id, started_at, completed_at, state_version, created_at, updated_at, origin_id
 `
 
 type RequestRunningAgentJobCancellationParams struct {
@@ -1696,6 +1709,7 @@ func (q *Queries) RequestRunningAgentJobCancellation(ctx context.Context, arg Re
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -1712,7 +1726,7 @@ WHERE agent.id = $1
   AND build.id = $2
   AND build.agent_id = agent.id
   AND build.deployment_token = $3
-RETURNING agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.tools_hash, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline
+RETURNING agent.id, agent.owner_principal_id, agent.slug, agent.name, agent.description, agent.status, agent.upgrade_status, agent.auto_fix, agent.build_provider_id, agent.build_model, agent.exec_provider_id, agent.exec_model, agent.stt_provider_id, agent.stt_model, agent.vision_provider_id, agent.vision_model, agent.tts_provider_id, agent.tts_model, agent.image_gen_provider_id, agent.image_gen_model, agent.embedding_provider_id, agent.embedding_model, agent.search_provider_id, agent.search_model, agent.source_ref, agent.image_ref, agent.db_schema, agent.db_password, agent.sdk_version, agent.config, agent.instructions, agent.error_message, agent.created_at, agent.updated_at, agent.mcp_enabled, agent.allow_public_mcp, agent.allow_public_routes, agent.emoji, agent.allow_oauth_mcp_prompt, agent.allow_public_mcp_prompt, agent.git_remote_url, agent.git_mode, agent.git_credential_id, agent.git_default_branch, agent.git_webhook_secret, agent.git_last_synced_ref, agent.agent_token_version, agent.job_dispatch_paused_build_id, agent.job_dispatch_paused_at, agent.job_dispatch_pause_deadline
 `
 
 type ResumeAgentJobDispatchParams struct {
@@ -1762,7 +1776,6 @@ func (q *Queries) ResumeAgentJobDispatch(ctx context.Context, arg ResumeAgentJob
 		&i.McpEnabled,
 		&i.AllowPublicMcp,
 		&i.AllowPublicRoutes,
-		&i.ToolsHash,
 		&i.Emoji,
 		&i.AllowOauthMcpPrompt,
 		&i.AllowPublicMcpPrompt,
@@ -1894,7 +1907,7 @@ WHERE job.id = $1
       WHERE attempt.job_id = job.id
         AND attempt.status IN ('leased', 'running')
   )
-RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at
+RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at, job.origin_id
 `
 
 func (q *Queries) RetryTerminalAgentJob(ctx context.Context, id pgtype.UUID) (AgentJob, error) {
@@ -1937,6 +1950,7 @@ func (q *Queries) RetryTerminalAgentJob(ctx context.Context, id pgtype.UUID) (Ag
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }
@@ -2131,7 +2145,7 @@ WHERE job.id = $6
   AND attempt.run_id = $9
   AND attempt.lease_token = $10
   AND attempt.lease_expires_at > now()
-RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at
+RETURNING job.id, job.agent_id, job.handler_name, job.handler_version, job.input_schema_hash, job.output_schema_hash, job.source_run_id, job.cron_id, job.cron_slug, job.initiator_kind, job.initiator_user_id, job.initiator_conversation_id, job.initiator_access, job.status, job.timeout_ms, job.max_attempts, job.attempt_limit, job.attempt_count, job.next_attempt_at, job.scheduled_at, job.input_payload, job.output_payload, job.progress_phase, job.progress_message, job.progress_completed, job.progress_total, job.progress_attempt, job.progress_updated_at, job.last_error, job.cancel_requested_at, job.cancelled_by_user_id, job.started_at, job.completed_at, job.state_version, job.created_at, job.updated_at, job.origin_id
 `
 
 type UpdateAgentJobProgressParams struct {
@@ -2198,6 +2212,7 @@ func (q *Queries) UpdateAgentJobProgress(ctx context.Context, arg UpdateAgentJob
 		&i.StateVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OriginID,
 	)
 	return i, err
 }

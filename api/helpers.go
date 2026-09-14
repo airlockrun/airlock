@@ -63,7 +63,7 @@ func writeServiceError(w http.ResponseWriter, err error, fallback string) {
 // sentinel to a 409 + user-facing message. ok is false for any other
 // error, so callers fall through to their generic 500 path. Shared by
 // every operator-side HTTP surface that forwards a prompt/trigger to an
-// agent. The A2A surface uses notRunnableMCPMessage in agentapi/ for a
+// agent. External MCP uses notRunnableMCPMessage in agentapi/ for a
 // JSON-RPC-shaped variant.
 func notRunnableResponse(err error) (status int, msg string, ok bool) {
 	switch {

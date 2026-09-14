@@ -44,15 +44,15 @@ export const agentConfigMessages = defineMessages({
 
   'agentConfig.accessLevel.public': {
     defaultMessage: 'Public',
-    description: 'Display label for the public access level on app tools, routes, and sibling connections.',
+    description: 'Display label for the public access level on app tools and routes.',
   },
   'agentConfig.accessLevel.user': {
     defaultMessage: 'User',
-    description: 'Display label for the signed-in user access level on app tools, routes, and sibling connections.',
+    description: 'Display label for the signed-in user access level on app tools and routes.',
   },
   'agentConfig.accessLevel.admin': {
     defaultMessage: 'Admin',
-    description: 'Display label for the administrator access level on app tools, routes, and sibling connections.',
+    description: 'Display label for the administrator access level on app tools and routes.',
   },
 
   'agentConfig.access.title': {
@@ -119,6 +119,26 @@ export const agentConfigMessages = defineMessages({
   'agentConfig.envVars.updated': {
     defaultMessage: '{slug} updated',
     description: 'Success toast after an environment variable is updated. Slug is the raw environment variable name.',
+  },
+  'agentConfig.envVars.restartRequired': {
+    defaultMessage: 'The app process still has the previous value cached. Restart it to apply this change.',
+    description: 'Persistent notice shown after an environment variable value changes.',
+  },
+  'agentConfig.envVars.restartNow': {
+    defaultMessage: 'Restart app now',
+    description: 'Button that restarts the app process after an environment variable value changes.',
+  },
+  'agentConfig.envVars.restartConfirmation': {
+    defaultMessage: 'Restart the app to apply the new value? Any work currently running in the app will be interrupted.',
+    description: 'Confirmation shown before restarting an app to apply an environment variable value.',
+  },
+  'agentConfig.envVars.restarted': {
+    defaultMessage: 'App restarted with the new environment value',
+    description: 'Success toast after restarting an app to apply an environment variable.',
+  },
+  'agentConfig.envVars.restartFailed': {
+    defaultMessage: 'App restart failed',
+    description: 'Fallback error when an app restart after an environment variable change fails.',
   },
   'agentConfig.envVars.clearSecretConfirmation': {
     defaultMessage: 'Clear the configured value for {slug}? The app will fail to read this until you set a new value.',
@@ -390,95 +410,6 @@ export const agentConfigMessages = defineMessages({
   'agentConfig.routes.path': {
     defaultMessage: 'Path',
     description: 'Table column heading for a raw route or webhook path.',
-  },
-
-  'agentConfig.siblings.addFailed': {
-    defaultMessage: 'add failed',
-    description: 'Fallback error when a sibling app could not be added and the server supplied no error.',
-  },
-  'agentConfig.siblings.updateFailed': {
-    defaultMessage: 'update failed',
-    description: 'Fallback error when sibling app access could not be updated and the server supplied no error.',
-  },
-  'agentConfig.siblings.removeFailed': {
-    defaultMessage: 'remove failed',
-    description: 'Fallback error when a sibling app could not be removed and the server supplied no error.',
-  },
-  'agentConfig.siblings.removeConfirmation': {
-    defaultMessage: "Remove {name} from this app's address book? This app's LLM will lose its {binding} binding on the next build.",
-    description: 'Confirmation before removing a sibling app. Name is app data and binding is a generated raw agent_slug identifier.',
-  },
-  'agentConfig.siblings.removeSibling': {
-    defaultMessage: 'Remove sibling',
-    description: 'Title of the confirmation dialog for removing a sibling app.',
-  },
-  'agentConfig.siblings.title': {
-    defaultMessage: 'Sibling apps',
-    description: 'Heading above the apps in this app address book.',
-  },
-  'agentConfig.siblings.description': {
-    defaultMessage: "This app will be able to call the other apps listed here. Max access caps what this app can do on each; it auto-downgrades (and the row drops) if the target's owner lowers or revokes access.",
-    description: 'Explanation of outbound sibling apps and their effective maximum access.',
-  },
-  'agentConfig.siblings.maxAccess': {
-    defaultMessage: 'Max access',
-    description: 'Table heading and field label for the maximum access a sibling app call can receive.',
-  },
-  'agentConfig.siblings.cappedTitle': {
-    defaultMessage: "Set to {access}, capped by the target's current grant",
-    description: 'Tooltip explaining a reduced sibling access value. Access is the localized label for the configured access level.',
-  },
-  'agentConfig.siblings.cappedFrom': {
-    defaultMessage: 'capped from {access}',
-    description: 'Short note beside reduced sibling access. Access is the localized label for the configured access level.',
-  },
-  'agentConfig.siblings.empty': {
-    defaultMessage: 'No sibling apps yet.',
-    description: 'Empty state for this app sibling address book.',
-  },
-  'agentConfig.siblings.addSibling': {
-    defaultMessage: 'Add sibling',
-    description: 'Button label and dialog title for adding an app to the sibling address book.',
-  },
-  'agentConfig.siblings.connectedTitle': {
-    defaultMessage: 'Connected to this app',
-    description: 'Heading above apps that have this app in their address book.',
-  },
-  'agentConfig.siblings.connectedDescription': {
-    defaultMessage: 'Apps that have added this one to their address book - who can call this app via A2A, and the live max access each has.',
-    description: 'Explanation of inbound sibling app connections and their effective maximum access.',
-  },
-  'agentConfig.siblings.owner': {
-    defaultMessage: 'Owner',
-    description: 'Table column heading for the externally supplied owner name of a sibling app.',
-  },
-  'agentConfig.siblings.noInbound': {
-    defaultMessage: 'No apps call this one.',
-    description: 'Empty state for apps that call this app through A2A.',
-  },
-  'agentConfig.siblings.addDialogDescription': {
-    defaultMessage: "Apps this app's owner has access to.",
-    description: 'Explanation of which apps are available in the add-sibling picker.',
-  },
-  'agentConfig.siblings.app': {
-    defaultMessage: 'App',
-    description: 'Label for the app picker in the add-sibling dialog.',
-  },
-  'agentConfig.siblings.pickApp': {
-    defaultMessage: 'Pick an app',
-    description: 'Placeholder in the app picker in the add-sibling dialog.',
-  },
-  'agentConfig.siblings.maxAccessHelp': {
-    defaultMessage: "The ceiling for what this app can do when it calls the sibling. The real access is still floored by the driving user's and this app's owner's access on the target.",
-    description: 'Help text for maximum access when adding a sibling app.',
-  },
-  'agentConfig.siblings.editMaxAccess': {
-    defaultMessage: 'Edit max access',
-    description: 'Title of the dialog for editing sibling maximum access.',
-  },
-  'agentConfig.siblings.editMaxAccessHelp': {
-    defaultMessage: "Operator intent. The effective ceiling is still floored by the target's current grant.",
-    description: 'Help text for editing the intended maximum access of a sibling app.',
   },
 
   'agentConfig.tools.empty': {

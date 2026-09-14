@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
-	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
+	"github.com/airlockrun/airlock/service/mcpaccess"
+	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -38,13 +37,12 @@ import (
 // v1: no pagination — agents typically have well under 1000 files. If a
 // directory exceeds 10k entries we cap and document. Pagination via
 // nextCursor can be added when actual usage hits the cap.
-func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
+func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
 	targetID := uuid.UUID(target.ID.Bytes)
-	caller := mcpFileCaller(access, principal)
-	roots, err := h.files.ListRoots(ctx, caller, targetID)
+	roots, err := access.ListRoots(ctx, principal, targetID)
 	if err != nil {
 		s.logger.Error("mcp resources: resolve list roots", zap.Error(err))
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories: "+err.Error())
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "list directories: "+err.Error())
 		return
 	}
 	type entry struct {
@@ -78,9 +76,9 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	visible, err := h.files.FilterList(ctx, caller, targetID, paths)
+	visible, err := access.FilterList(ctx, principal, targetID, paths)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "authorize directory listing")
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "authorize directory listing")
 		return
 	}
 	out := make([]entry, 0, len(visible))
@@ -95,27 +93,24 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 // handleResourcesRead returns the bytes of one resource. For ≤10MB
 // files, inline base64. For larger files, return a friendly text +
 // _meta.airlock.run/downloadUrl presigned URL.
-func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
+func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWriter, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
 	var params struct {
 		URI string `json:"uri"`
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil || params.URI == "" {
-		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "uri is required")
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "uri is required")
 		return
 	}
 	path := strings.TrimPrefix(params.URI, "agent://")
-	if path == params.URI {
-		// Some clients may pass the bare path. Accept that too.
-	}
-	resolved, err := h.files.Resolve(ctx, mcpFileCaller(access, principal), uuid.UUID(target.ID.Bytes), path, agentstoragesvc.OperationRead)
+	resolved, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "resource not found")
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
 		return
 	}
 
 	info, ct, err := h.s3.HeadObject(ctx, resolved.S3Key)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrInvalidParams, "resource not found")
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
 		return
 	}
 
@@ -123,6 +118,10 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 	// stub. Spec-compliant clients that ignore _meta still get a useful
 	// message; ones that read _meta open the URL directly.
 	if info.Size > int64(maxInlineResourceBytes) {
+		if _, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path); err != nil {
+			writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
+			return
+		}
 		url, perr := h.s3.PublicPresignGetURL(ctx, resolved.S3Key, presignedURLTTL)
 		var stub string
 		meta := map[string]any{"airlock.run/size": info.Size}
@@ -147,13 +146,21 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 
 	reader, err := h.s3.GetObject(ctx, resolved.S3Key)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "fetch: "+err.Error())
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "fetch: "+err.Error())
 		return
 	}
 	defer reader.Close()
 	raw, err := io.ReadAll(io.LimitReader(reader, int64(maxInlineResourceBytes)+1))
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "read: "+err.Error())
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "read: "+err.Error())
+		return
+	}
+	if len(raw) > maxInlineResourceBytes {
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "file exceeds inline transfer limit")
+		return
+	}
+	if _, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path); err != nil {
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
 		return
 	}
 	contents := []map[string]any{{
@@ -167,10 +174,10 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 
 // handleResourcesTemplatesList returns one URI template per visible
 // directory so clients can show a tree view of the agent's namespace.
-func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, h *Handler, q *dbq.Queries, target dbq.Agent, access agentsdk.Access, principal MCPPrincipal, msg jsonrpcMessage) {
-	roots, err := h.files.ListRoots(ctx, mcpFileCaller(access, principal), uuid.UUID(target.ID.Bytes))
+func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
+	roots, err := access.ListRoots(ctx, principal, uuid.UUID(target.ID.Bytes))
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, rpcErrServerError, "list directories: "+err.Error())
+		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "list directories: "+err.Error())
 		return
 	}
 	type tmpl struct {
@@ -188,17 +195,6 @@ func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.Res
 	}
 	result, _ := json.Marshal(map[string]any{"resourceTemplates": out})
 	writeJSONRPCResult(w, msg.ID, result)
-}
-
-func mcpFileCaller(access agentsdk.Access, principal MCPPrincipal) agentstoragesvc.Caller {
-	caller := agentstoragesvc.Caller{Access: access, UserID: principal.UserID, ParentRunID: principal.ParentRunID}
-	if principal.Kind == MCPPrincipalAnon {
-		caller.Principal = authz.AnonymousPrincipal()
-		return caller
-	}
-	caller.Principal = authz.UserPrincipal(principal.UserID, "")
-	caller.Principal.OnBehalfOfAgent = principal.CallerAgentID
-	return caller
 }
 
 // mimeFromName guesses content-type from extension. Used purely as a UI

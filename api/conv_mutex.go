@@ -17,6 +17,7 @@ type convMutexMap struct {
 	mu    sync.Mutex
 	locks map[string]*convMutex
 	stop  chan struct{}
+	done  chan struct{}
 }
 
 type convMutex struct {
@@ -30,6 +31,7 @@ func newConvMutexMap() *convMutexMap {
 	m := &convMutexMap{
 		locks: make(map[string]*convMutex),
 		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
 	}
 	go m.sweepLoop()
 	return m
@@ -68,10 +70,12 @@ func (m *convMutexMap) Unlock(convID string) {
 // Close stops the background sweep goroutine.
 func (m *convMutexMap) Close() {
 	close(m.stop)
+	<-m.done
 }
 
 // sweepLoop periodically removes idle mutex entries to prevent memory leaks.
 func (m *convMutexMap) sweepLoop() {
+	defer close(m.done)
 	ticker := time.NewTicker(convMutexSweepInterval)
 	defer ticker.Stop()
 	for {

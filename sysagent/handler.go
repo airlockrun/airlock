@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/airlockrun/airlock/authz"
 
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
@@ -32,18 +31,18 @@ import (
 // agentID is the agent that was being upgraded; the message body
 // references it so the LLM has context when responding. conversationID is
 // the sysagent conversation that triggered the upgrade.
-func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error {
+func (s *Service) NotifyUpgradeComplete(ctx context.Context, agentID, conversationID, originRunID uuid.UUID, status, message string) error {
 	prefix, source := upgradeOutcomeRendering(status)
-	return s.notifyAndResume(ctx, agentID, conversationID, prefix, source, message)
+	return s.notifyAndResume(ctx, agentID, conversationID, originRunID, prefix, source, message)
 }
 
 // NotifyBuildComplete satisfies builder.PostBuildSystemNotifier — the
 // initial-build counterpart of NotifyUpgradeComplete. Triggered after a
 // build kicked off from the system-agent create_agent tool finishes; same
 // inject-then-resume mechanism, build-flavored prefix.
-func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversationID uuid.UUID, status, message string) error {
+func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversationID, originRunID uuid.UUID, status, message string) error {
 	prefix, source := buildOutcomeRendering(status)
-	return s.notifyAndResume(ctx, agentID, conversationID, prefix, source, message)
+	return s.notifyAndResume(ctx, agentID, conversationID, originRunID, prefix, source, message)
 }
 
 // NotifyBotCreated announces a freshly-created managed Telegram bot into the
@@ -51,16 +50,16 @@ func (s *Service) NotifyBuildComplete(ctx context.Context, agentID, conversation
 // so the agent hands the operator the open link in-character. Same inject-then-
 // resume mechanism as NotifyBuildComplete; agentID is nil (the event is about a
 // bot, not an agent build — the WS envelope's AgentId is unused on bridges).
-func (s *Service) NotifyBotCreated(ctx context.Context, conversationID uuid.UUID, botUsername string) error {
+func (s *Service) NotifyBotCreated(ctx context.Context, conversationID, originRunID uuid.UUID, botUsername string) error {
 	msg := fmt.Sprintf("Telegram bot @%s was created and bound to the agent. Give the operator a link to open it: https://t.me/%s", botUsername, botUsername)
-	return s.notifyAndResume(ctx, uuid.Nil, conversationID, "[Bot ready] ", "upgrade", msg)
+	return s.notifyAndResume(ctx, uuid.Nil, conversationID, originRunID, "[Bot ready] ", "upgrade", msg)
 }
 
 // notifyAndResume injects a user-role outcome message into a system-agent
 // conversation and kicks an auto-resume LLM turn so the agent reacts. Shared
 // by the upgrade and build notifiers; prefix/source are pre-rendered by the
 // caller for the specific outcome.
-func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID uuid.UUID, prefix, source, message string) error {
+func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID, originRunID uuid.UUID, prefix, source, message string) error {
 	body := prefix + message
 
 	// 1. Persist the user-role injection (web + bridge alike). content is
@@ -68,7 +67,8 @@ func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID u
 	//    agent_messages uses for a single-text payload. source="upgrade"/
 	//    "error" drives bubble styling. The next history load picks it up,
 	//    and the auto-resume turn below reacts to it.
-	if err := s.appendInjectedMessage(ctx, conversationID, "user", source, body, nil); err != nil {
+	conversation, err := s.domain.AppendNotification(ctx, agentID, conversationID, originRunID, source, body)
+	if err != nil {
 		return fmt.Errorf("append outcome-notify message: %w", err)
 	}
 
@@ -77,11 +77,6 @@ func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID u
 	//    NotifyUpgradeComplete): a bridge thread (source="bridge" + bridge_id
 	//    + external_id) is delivered out-of-band by the bridge poster; a web
 	//    thread streams over the WS pubsub.
-	q := dbq.New(s.db.Pool())
-	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
-	if err != nil {
-		return fmt.Errorf("load conversation for outcome-notify: %w", err)
-	}
 	isBridge := conversation.Source == "bridge" && conversation.BridgeID.Valid &&
 		conversation.ExternalID.Valid && conversation.ExternalID.String != "" && s.bridgeResumer != nil
 
@@ -122,13 +117,13 @@ func (s *Service) notifyAndResume(ctx context.Context, agentID, conversationID u
 	go func() {
 		bg := context.Background()
 		if isBridge {
-			if err := s.bridgeResumer.ResumeSystemConversation(bg, conversationID); err != nil {
+			if err := s.bridgeResumer.ResumeSystemConversation(bg, conversationID, originRunID); err != nil {
 				s.logger.Error("sysagent: bridge auto-resume after outcome-notify failed",
 					zap.Stringer("conversation", conversationID), zap.Error(err))
 			}
 			return
 		}
-		if err := s.resumeConversation(bg, conversationID); err != nil {
+		if err := s.resumeConversation(bg, conversationID, originRunID); err != nil {
 			s.logger.Error("sysagent: auto-resume after outcome-notify failed",
 				zap.Stringer("conversation", conversationID), zap.Error(err))
 		}
@@ -167,56 +162,24 @@ func buildOutcomeRendering(status string) (prefix, source string) {
 	return "[Build " + status + "] ", "upgrade"
 }
 
-// appendInjectedMessage persists a system-injected message into the
-// conversation WITHOUT going through the sessionStore — sessionStore is
-// scoped to one chat turn's runner, while injection comes from
-// outside any turn. The next chat-loop Load will pick this up via
-// ListSystemMessagesByConversation the same way operator-typed messages
-// are loaded.
-func (s *Service) appendInjectedMessage(ctx context.Context, conversationID uuid.UUID, role, source, content string, partsJSON []byte) error {
-	q := dbq.New(s.db.Pool())
-	_, err := q.AppendSystemMessage(ctx, dbq.AppendSystemMessageParams{
-		ConversationID: pgtype.UUID{Bytes: conversationID, Valid: true},
-		Role:           role,
-		Source:         source,
-		Content:        content,
-		Parts:          partsJSON,
-		CostEstimate:   pgNumericFromFloat(0),
-	})
-	if err != nil {
-		return err
-	}
-	// Touch the conversation so it bubbles up in the sidebar.
-	_ = q.TouchSystemConversation(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
-	return nil
-}
-
 // resumeConversation kicks off a fresh chat turn against the conversation with
 // whatever messages are in history. The system-injected user message
 // (e.g. "[Upgrade succeeded] …") is already persisted by the caller;
 // this method just starts a new run so the LLM reads the updated
 // history and reacts.
 //
-// Principal is reconstructed from the conversation's user_id + that user's
-// current tenant role. The conversation carries who owns it; the tenant
-// role is looked up fresh in case it changed between the original
-// upgrade trigger and the build completion. Either Principal field
-// missing → abort with a logged error (the run injection still
-// persists in the conversation DB-side, so the LLM will react on the next
-// operator prompt instead — degraded but never silently dropped).
-func (s *Service) resumeConversation(ctx context.Context, conversationID uuid.UUID) error {
-	q := dbq.New(s.db.Pool())
-	conversation, err := q.GetSystemConversationByID(ctx, pgtype.UUID{Bytes: conversationID, Valid: true})
+// The domain restores and revalidates the durable admission proof.
+func (s *Service) resumeConversation(ctx context.Context, conversationID, originRunID uuid.UUID) error {
+	p, err := s.ResumePrincipal(ctx, conversationID, originRunID)
 	if err != nil {
-		return fmt.Errorf("load conversation for resume: %w", err)
+		return err
 	}
-	user, err := q.GetUserByID(ctx, conversation.UserID)
-	if err != nil {
-		return fmt.Errorf("load user for resume: %w", err)
-	}
-	p := principalForUser(uuid.UUID(conversation.UserID.Bytes), user.TenantRole)
 	if _, err := s.RunPrompt(ctx, p, conversationID, PromptInput{}); err != nil {
 		return fmt.Errorf("kick auto-resume RunPrompt: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) ResumePrincipal(ctx context.Context, conversationID, originRunID uuid.UUID) (authz.Principal, error) {
+	return s.domain.ResumePrincipal(ctx, conversationID, originRunID)
 }

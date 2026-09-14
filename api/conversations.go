@@ -4,27 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
-	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
-	promptpkg "github.com/airlockrun/airlock/prompt"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/service"
+	agentstorage "github.com/airlockrun/airlock/service/agentstorage"
+	chatsvc "github.com/airlockrun/airlock/service/chat"
 	convsvc "github.com/airlockrun/airlock/service/conversations"
-	runssvc "github.com/airlockrun/airlock/service/runs"
+	"github.com/airlockrun/airlock/service/execution"
+	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/airlock/trigger"
 	"github.com/go-chi/chi/v5"
@@ -34,7 +34,6 @@ import (
 
 type conversationsHandler struct {
 	svc          *convsvc.Service
-	runsSvc      *runssvc.Service
 	db           *db.DB
 	dispatcher   *trigger.Dispatcher
 	promptProxy  *trigger.PromptProxy
@@ -44,6 +43,35 @@ type conversationsHandler struct {
 	convLocks    *convMutexMap
 	agentBaseURL func(slug string) string
 	logger       *zap.Logger
+	mu           sync.Mutex
+	workers      sync.WaitGroup
+	drained      chan struct{}
+}
+
+// beginForward counts admission as well as the publisher it can start. Holding
+// mu across Add and stopping admission prevents an Add/Wait race at shutdown.
+func (h *conversationsHandler) beginForward() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.drained != nil {
+		return false
+	}
+	h.workers.Add(1)
+	return true
+}
+
+func (h *conversationsHandler) stopForwarding() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.drained == nil {
+		h.drained = make(chan struct{})
+		go func() {
+			h.workers.Wait()
+			h.convLocks.Close()
+			close(h.drained)
+		}()
+	}
+	return h.drained
 }
 
 func writeConvError(w http.ResponseWriter, err error, fallback string) {
@@ -189,9 +217,6 @@ func (h *conversationsHandler) GetConversation(w http.ResponseWriter, r *http.Re
 			RunId:       det.PendingConfirmation.RunID,
 			ToolCallId:  det.PendingConfirmation.ToolCallID,
 			ToolName:    det.PendingConfirmation.ToolName,
-			Permission:  det.PendingConfirmation.Permission,
-			Patterns:    det.PendingConfirmation.Patterns,
-			Code:        det.PendingConfirmation.Code,
 			Input:       det.PendingConfirmation.Input,
 			Description: det.PendingConfirmation.Description,
 		}
@@ -248,66 +273,13 @@ func (h *conversationsHandler) DeleteConversation(w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusNoContent)
 }
 
-const (
-	// resumeWaitTimeout bounds how long a confirmation resume waits for the
-	// agent's async /run/complete to mark the run suspended. The run streams
-	// its confirmation event to the UI before that write lands, so an approval
-	// can arrive a few ms ahead of the status flip — wait it out rather than
-	// dropping the grant and orphaning the run.
-	resumeWaitTimeout  = 10 * time.Second
-	resumeWaitInterval = 100 * time.Millisecond
-)
-
-// awaitSuspendedRun resolves the run a confirmation response names, scoped to
-// this conversation, tolerating the race where the approval beats the agent's
-// suspend write. Returns an error (surfaced as 409 → a UI toast) if the run
-// belongs elsewhere, has already finished, or never becomes resumable before the
-// deadline. Validating trigger_ref == this web conversation also rejects
-// resuming a sibling-delegated (source='a2a') suspension on the same agent.
-func (h *conversationsHandler) awaitSuspendedRun(ctx context.Context, q *dbq.Queries, runIDStr string, conv dbq.AgentConversation, agentID uuid.UUID) (dbq.Run, error) {
-	runID, err := parseUUID(runIDStr)
-	if err != nil {
-		return dbq.Run{}, errors.New("invalid resume_run_id")
-	}
-	convIDStr := convert.PgUUIDToString(conv.ID)
-	deadline := time.Now().Add(resumeWaitTimeout)
-	for {
-		// airlockvet:allow-dbq reason: polling lookup inside Prompt's resume flow; caller already verified conversation ownership via h.ownedConversation
-		run, err := q.GetRunByID(ctx, toPgUUID(runID))
-		if err != nil {
-			return dbq.Run{}, errors.New("run not found")
-		}
-		if uuid.UUID(run.AgentID.Bytes) != agentID || run.TriggerType != "prompt" || run.TriggerRef != convIDStr {
-			return dbq.Run{}, errors.New("run does not belong to this conversation")
-		}
-		switch run.Status {
-		case "suspended":
-			if err := agentapi.ValidateSuspendedCheckpoint(run.Checkpoint); err != nil {
-				return dbq.Run{}, fmt.Errorf("run checkpoint is invalid: %w", err)
-			}
-			return run, nil
-		case "running":
-		default:
-			// success / error / failed / cancelled — already terminal.
-			return dbq.Run{}, errors.New("run already finished; nothing to confirm")
-		}
-
-		// The resumable state consists of status='suspended' and a checkpoint.
-		// A running row or an incomplete suspended row can become resumable
-		// while the completion transaction is still in flight on another replica.
-		if time.Now().After(deadline) {
-			return dbq.Run{}, errors.New("run did not become resumable in time; try again")
-		}
-		select {
-		case <-ctx.Done():
-			return dbq.Run{}, ctx.Err()
-		case <-time.After(resumeWaitInterval):
-		}
-	}
-}
-
-// Prompt handles POST /api/v1/agents/{agentID}/prompt — streams NDJSON.
+// Prompt handles POST /api/v1/agents/{agentID}/prompt. Events use WebSocket.
 func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
+	if !h.beginForward() {
+		writeError(w, http.StatusServiceUnavailable, "chat is shutting down")
+		return
+	}
+	defer h.workers.Done()
 	ctx := r.Context()
 	agentID, err := parseUUID(chi.URLParam(r, "agentID"))
 	if err != nil {
@@ -347,7 +319,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// Resolve the target conversation. A conversation_id addresses an
 	// existing web thread (multi-conversation); it must belong to this
 	// agent, be owned by this user, and be a web thread — never a
-	// bridge/a2a row reachable by id. Empty conversation_id starts a new
+	// bridge row reachable by id. Empty conversation_id starts a new
 	// web thread (the "new chat" affordance / first message).
 	var conv dbq.AgentConversation
 	if req.ConversationId != "" {
@@ -363,12 +335,7 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}
 		conv = existing
 	} else {
-		// airlockvet:allow-dbq reason: new-thread create on a Prompt the caller already has access to (resolved upstream)
-		created, cerr := q.CreateWebConversation(ctx, dbq.CreateWebConversationParams{
-			AgentID: toPgUUID(agentID),
-			UserID:  toPgUUID(userID),
-			Title:   truncate(req.Message, 100),
-		})
+		created, cerr := h.svc.Create(ctx, p, agentID, truncate(req.Message, 100))
 		if cerr != nil {
 			h.logger.Error("create conversation", zap.Error(cerr))
 			writeError(w, http.StatusInternalServerError, "failed to create conversation")
@@ -384,7 +351,11 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// and the client learns about it via a populated command_reply.
 	// `/compact` still triggers an agent run but with ForceCompact=true, so
 	// we fall through to the normal forward-to-agent path.
-	access := principalFromRequest(r).EffectiveAgentAccess(ctx, q, agentID)
+	access, err := execution.Access(ctx, q, p, agentID)
+	if err != nil {
+		writeServiceError(w, err, "execution authority unavailable")
+		return
+	}
 	var forceCompact bool
 	slashConv := trigger.NewAgentSlashConv(q, h.dispatcher, h.logger, agentID, h.agentBaseURL)
 	if cmd, err := trigger.TrySlashCommand(ctx, slashConv, convID, access, req.Message); err != nil {
@@ -406,19 +377,25 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// rides as S3 metadata (set during upload); fall back to basename when
 	// it isn't there (e.g. files written by run_js).
 	var fileInfos []wire.FileInfo
+	files := agentstorage.New(h.db)
 	for _, filePath := range req.FilePaths {
-		s3Key := "agents/" + agentID.String() + "/" + filePath
-		info, ct, err := h.s3.HeadObject(ctx, s3Key)
+		resolved, err := files.Resolve(ctx, agentstorage.Caller{Principal: p, Access: access, UserID: userID, ConversationID: pgUUID(convID)}, agentID, filePath, agentstorage.OperationRead)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "attachment is not accessible")
+			return
+		}
+		info, ct, err := h.s3.HeadObject(ctx, resolved.S3Key)
 		if err != nil {
 			h.logger.Warn("file not found", zap.String("path", filePath))
-			continue
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return
 		}
 		filename := filepath.Base(filePath)
 		if origFilename, ok := info.Metadata["filename"]; ok && origFilename != "" {
 			filename = origFilename
 		}
 		fileInfos = append(fileInfos, wire.FileInfo{
-			Path:        filePath,
+			Path:        resolved.Relative,
 			Filename:    filename,
 			ContentType: ct,
 			Size:        info.Size,
@@ -447,9 +424,9 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 				MimeType: fi.ContentType,
 			})
 		}
-		if err := agentapi.PostToConversation(ctx, agentapi.PostDeps{
+		if err := runtimesvc.PostToConversation(ctx, runtimesvc.PostDeps{
 			DB: h.db, PubSub: h.pubsub, BridgeMgr: h.bridgeMgr, S3: h.s3, Logger: h.logger,
-		}, agentapi.PostOpts{
+		}, runtimesvc.PostOpts{
 			AgentID:        agentID,
 			ConversationID: pgUUID(convID),
 			Role:           "user",
@@ -469,22 +446,11 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Look up the agent row for access-filtered instructions. Model
-	// modalities aren't resolved here — the agent renders them from its
-	// synced PromptData, which airlock keeps current across model changes.
-	var instructions string
-	// airlockvet:allow-dbq reason: agent row read for prompt rendering; access is gated by ownedConversation upstream
-	if ag, err := q.GetAgentByID(ctx, toPgUUID(agentID)); err == nil {
-		instructions = promptpkg.RenderInstructions(ag.Instructions, access)
-	}
-
-	// Build prompt input — SessionStore in agent container handles message
-	// loading and persistence. Airlock just sends the new user message.
+	// The hosted runtime loads and persists history under its conversation lease.
 	input := wire.PromptInput{
 		Message:        req.Message,
 		ConversationID: convIDStr,
 		Files:          fileInfos,
-		Instructions:   instructions,
 		ForceCompact:   forceCompact,
 		CallerAccess:   wire.Access(access),
 		DirectTools:    access == agentsdk.AccessPublic,
@@ -500,31 +466,9 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 	// A confirmation response — or a free-text message typed while a
 	// confirmation is pending — carries the exact run it resolves: the UI
 	// took the id from the confirmation event. Resume THAT run rather than
-	// guessing the conversation's latest suspended one. awaitSuspendedRun
-	// also tolerates the race where the approval beats the agent's async
-	// suspend write. An explicit approve/deny must name its run.
-	var claimedResume *dbq.Run
+	// guessing the conversation's latest suspended one. Host admission owns
+	// the wait and atomic claim. An explicit approve/deny must name its run.
 	if req.ResumeRunId != "" {
-		run, werr := h.awaitSuspendedRun(ctx, q, req.ResumeRunId, conv, agentID)
-		if werr != nil {
-			h.convLocks.Unlock(convIDStr)
-			writeError(w, http.StatusConflict, werr.Error())
-			return
-		}
-		// airlockvet:allow-dbq reason: claims the awaited suspended run; caller already proven owner of the conversation
-		resolved, rerr := q.ResolveSuspendedRun(ctx, run.ID)
-		if rerr != nil {
-			h.convLocks.Unlock(convIDStr)
-			h.logger.Error("resolve suspended run", zap.Error(rerr))
-			writeError(w, http.StatusInternalServerError, "failed to resolve confirmation")
-			return
-		}
-		if resolved != 1 {
-			h.convLocks.Unlock(convIDStr)
-			writeError(w, http.StatusConflict, "confirmation has already been resolved")
-			return
-		}
-		claimedResume = &run
 		input.ResumeRunID = req.ResumeRunId
 		input.Approved = req.Approved
 		// On deny, sol persists the re-reason nudge ("Rejected by user.")
@@ -539,63 +483,24 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 		h.convLocks.Unlock(convIDStr)
 		writeError(w, http.StatusBadRequest, "resume_run_id is required for a confirmation response")
 		return
-	} else {
-		// Free-text typed while a confirmation is still pending, with no
-		// resume_run_id attached. The client is supposed to carry the id from
-		// the confirmation event (or restore it on conversation load), but a
-		// dropped WS event on a flaky link leaves the gate unknown to the
-		// client, so it sends a plain prompt. Resolve the pending run as denied
-		// and re-reason the new message in it. Without this the suspended turn's
-		// tool-call is orphaned (an assistant tool_calls message with no tool
-		// result), which permanently 400s the conversation on OpenAI-compatible
-		// providers ("tool message must follow tool_calls"). Only the CAS winner
-		// attaches resume fields; another replica forwards its text as a new turn.
-		// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
-		if suspendedRun, err := q.GetLatestSuspendedRunByConversation(ctx, convIDStr); err == nil {
-			if err := agentapi.ValidateSuspendedCheckpoint(suspendedRun.Checkpoint); err != nil {
-				h.convLocks.Unlock(convIDStr)
-				writeError(w, http.StatusConflict, "pending run checkpoint is invalid")
-				return
-			}
-			// airlockvet:allow-dbq reason: resolves a stranded suspended run; caller already proven owner of the conversation
-			resolved, rerr := q.ResolveSuspendedRun(ctx, suspendedRun.ID)
-			if rerr != nil {
-				h.convLocks.Unlock(convIDStr)
-				h.logger.Error("auto-deny suspended run", zap.Error(rerr))
-				writeError(w, http.StatusInternalServerError, "failed to resolve pending confirmation")
-				return
-			}
-			if resolved == 1 {
-				claimedResume = &suspendedRun
-				input.ResumeRunID = convert.PgUUIDToString(suspendedRun.ID)
-				approved := false
-				input.Approved = &approved
-			}
-		}
 	}
 
-	// Forward to agent container — no bridge_id for web.
+	// Start hosted chat without a bridge_id for web.
 	// Use background context: the response body must outlive this HTTP request
 	// since we stream it in a goroutine after returning 200 to the client.
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, &userID)
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.WithoutCancel(ctx), p, agentID, input)
 	if err != nil {
-		if claimedResume != nil {
-			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			// airlockvet:allow-dbq reason: restores the owned conversation's claimed run only when no successor resume exists
-			rolledBack, rollbackErr := q.RollbackPromptRunResume(rollbackCtx, dbq.RollbackPromptRunResumeParams{
-				ID: claimedResume.ID, AgentID: toPgUUID(agentID), TriggerRef: convIDStr,
-			})
-			cancel()
-			if rollbackErr != nil {
-				h.logger.Error("rollback failed prompt resume", zap.Error(rollbackErr))
-			} else if rolledBack == 0 {
-				h.logger.Info("prompt resume remains resolved because a successor owns it",
-					zap.String("resume_run_id", convert.PgUUIDToString(claimedResume.ID)))
-			}
-		}
 		h.convLocks.Unlock(convIDStr)
+		if errors.Is(err, chatsvc.ErrShuttingDown) {
+			writeError(w, http.StatusServiceUnavailable, "chat is shutting down")
+			return
+		}
 		if status, msg, ok := notRunnableResponse(err); ok {
 			writeError(w, status, msg)
+			return
+		}
+		if errors.Is(err, service.ErrConflict) || errors.Is(err, service.ErrUnauthorized) || errors.Is(err, service.ErrForbidden) {
+			writeServiceError(w, err, "chat runtime is not ready")
 			return
 		}
 		h.logger.Error("forward prompt", zap.Error(err))
@@ -611,19 +516,14 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 
 	// Stream NDJSON → WS events in background goroutine.
 	// Conversation lock is released when streaming completes.
-	// Message persistence is handled by the SessionStore in the agent container.
+	// Host settlement and lease recovery own terminal state, not this transport.
+	h.workers.Add(1) // Admission remains counted until this handler returns.
 	go func() {
+		defer h.workers.Done()
 		defer h.convLocks.Unlock(convIDStr)
 		bgCtx := context.Background()
-		agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, convIDStr, userID.String(), nil, h.logger)
-
-		// Fallback when the agent never wrote its own terminal status
-		// (stuck in an infinite run_js loop, container died, etc.). The
-		// CAS guard inside MarkTimedOut means the agent's authoritative
-		// success/error write — if it lands — wins this race.
-		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
-			h.logger.Error("finalize run timeout", zap.Error(err))
-		}
+		runtimesvc.
+			PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, h.logger)
 	}()
 }
 
@@ -634,18 +534,17 @@ func (h *conversationsHandler) Prompt(w http.ResponseWriter, r *http.Request) {
 // special arrow / error bubble; meanwhile the LLM sees a clean user
 // turn it can respond to.
 //
-// We deliberately don't write a separate assistant bubble here. The
-// previous shape (assistant bubble + duplicate user prompt + LLM
-// reply) confused the LLM: it saw "an assistant message I never
-// wrote" and reacted by either re-running requestUpgrade or
-// disclaiming the result ("I can't honestly confirm that"). Sending
-// the result strictly as a user-side notification removes that
-// ambiguity.
+// A user-side notification distinguishes the build outcome from the model's
+// own statements, so its follow-up can respond without repeating the upgrade.
 //
 // status: "success", "error", or "refused". message: the agent-provided
 // exit summary, the underlying failure reason, or the out-of-scope
 // explanation.
-func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID uuid.UUID, conversationID, status, message string) error {
+func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentID, sourceRunID uuid.UUID, conversationID, status, message string) error {
+	if !h.beginForward() {
+		return chatsvc.ErrShuttingDown
+	}
+	defer h.workers.Done()
 	h.convLocks.Lock(conversationID)
 
 	source := "upgrade"
@@ -684,14 +583,21 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 		h.convLocks.Unlock(conversationID)
 		return errors.New("conversation not found")
 	}
-	access = authz.UserPrincipal(pgUUID(conv.UserID), "").EffectiveAgentAccess(ctx, q, agentID)
+	p, err := execution.ContinuationPrincipal(ctx, q, agentID, convUUID, sourceRunID)
+	if err != nil {
+		h.convLocks.Unlock(conversationID)
+		return err
+	}
+	access, err = execution.Access(ctx, q, p, agentID)
+	if err != nil {
+		h.convLocks.Unlock(conversationID)
+		return err
+	}
 	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
 		conv.ExternalID.Valid && conv.ExternalID.String != "" && h.bridgeMgr != nil
 
-	// CallerAccess survives the post-upgrade follow-up turn so admin-only
-	// JS bindings (requestUpgrade, queryDB) keep working — without
-	// it the agent defaults to AccessUser and the LLM's natural "let me
-	// retry requestUpgrade" crashes with ReferenceError.
+	// Access here selects presentation; hosted admission restores authority from
+	// the initiating run and the broker authorizes each capability invocation.
 	input := wire.PromptInput{
 		Message:        llmText,
 		ConversationID: conversationID,
@@ -706,7 +612,7 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 	// upgrade; just streaming the agent's follow-up is enough.
 	if !isBridge {
 		partsJSON, _ := json.Marshal([]wire.DisplayPart{{Type: "text", Text: llmText}})
-		_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelope("notification", agentID.String(), &airlockv1.NotificationEvent{
+		_ = h.pubsub.Publish(context.Background(), agentID, realtime.NewEnvelopeForUser("notification", agentID.String(), pgUUID(conv.UserID).String(), conversationID, &airlockv1.NotificationEvent{
 			AgentId:        agentID.String(),
 			ConversationId: conversationID,
 			PartsJson:      string(partsJSON),
@@ -716,18 +622,15 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 
 	// Stream the agent's response in-process. The convLock is held until
 	// the stream drains so a concurrent user prompt waits its turn.
-	var userIDPtr *uuid.UUID
-	if conv.UserID.Valid {
-		u := pgUUID(conv.UserID)
-		userIDPtr = &u
-	}
-	rc, runID, err := h.dispatcher.ForwardPrompt(context.Background(), agentID, input, nil, userIDPtr)
+	rc, runID, err := h.dispatcher.ForwardPrompt(context.WithoutCancel(ctx), p, agentID, input)
 	if err != nil {
 		h.convLocks.Unlock(conversationID)
 		return err
 	}
 
+	h.workers.Add(1) // The callback still owns its admission count.
 	go func() {
+		defer h.workers.Done()
 		defer h.convLocks.Unlock(conversationID)
 		bgCtx := context.Background()
 		if isBridge {
@@ -755,16 +658,8 @@ func (h *conversationsHandler) NotifyUpgradeComplete(ctx context.Context, agentI
 				h.logger.Warn("post-upgrade bridge delivery failed", zap.Error(deliverErr))
 			}
 		} else {
-			var convUserID string
-			if conv.UserID.Valid {
-				convUserID = pgUUID(conv.UserID).String()
-			}
-			agentapi.PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, conversationID, convUserID, nil, h.logger)
-		}
-
-		// Same CAS-protected fallback as the user-prompt path.
-		if err := h.runsSvc.MarkTimedOut(bgCtx, runID); err != nil {
-			h.logger.Error("finalize upgrade run timeout", zap.Error(err))
+			runtimesvc.
+				PublishRunEvents(bgCtx, rc, h.pubsub, h.db.Pool(), agentID, runID, h.logger)
 		}
 	}()
 	return nil
@@ -835,7 +730,7 @@ func (h *conversationsHandler) UploadFile(w http.ResponseWriter, r *http.Request
 
 // ownedConversation loads the {convID} route param and enforces the
 // same owner + surface gate as GetConversation/DeleteConversation: the
-// caller must own it and it must not be an a2a transport row. On any
+// caller must own an interactive conversation. On any
 // failure it writes the response and returns ok=false so the handler
 // just returns. Used by the conversation-scoped topic endpoints.
 func (h *conversationsHandler) ownedConversation(ctx context.Context, w http.ResponseWriter, r *http.Request) (dbq.AgentConversation, bool) {
@@ -868,7 +763,7 @@ func messageToProto(ctx context.Context, s3Client *storage.S3Client, logger *zap
 		RunId:        convert.PgUUIDToString(m.RunID),
 	}
 	if len(m.Parts) > 0 {
-		info.Parts = string(agentapi.ResolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
+		info.Parts = string(runtimesvc.ResolveMediaPartsJSON(ctx, s3Client, logger, m.Parts))
 	}
 	return info
 }

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/airlockrun/airlock/auth"
 )
 
 const proxyAuthHeader = "X-Airlock-Proxy-Auth"
@@ -99,12 +101,16 @@ func RealIP(cfg *RealIPConfig) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			peerIP := parseRemoteAddr(r.RemoteAddr)
 			proxyAuth := r.Header.Get(proxyAuthHeader)
+			uniqueProxyAuth := len(r.Header.Values(proxyAuthHeader)) == 1
 			r.Header.Del(proxyAuthHeader)
 			if peerIP != nil {
 				r.RemoteAddr = peerIP.String()
 			}
 
-			if peerIP != nil && cfg.isTrustedPeer(peerIP) && cfg.authenticates(proxyAuth) {
+			if uniqueProxyAuth && peerIP != nil && cfg.isTrustedPeer(peerIP) && cfg.authenticates(proxyAuth) {
+				if values := r.Header.Values("X-Forwarded-Proto"); len(values) == 1 && (values[0] == "https" || values[0] == "http") {
+					r = r.WithContext(auth.WithAuthenticatedProxyScheme(r.Context(), values[0]))
+				}
 				// X-Forwarded-For is preferred because conforming proxies append
 				// to it. X-Real-IP is accepted only as a single-hop fallback.
 				if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -121,6 +127,7 @@ func RealIP(cfg *RealIPConfig) func(http.Handler) http.Handler {
 			r.Header.Del("Forwarded")
 			r.Header.Del("X-Forwarded-For")
 			r.Header.Del("X-Real-IP")
+			r.Header.Del("X-Forwarded-Proto")
 			next.ServeHTTP(w, r)
 		})
 	}

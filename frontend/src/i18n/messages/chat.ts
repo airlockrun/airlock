@@ -301,14 +301,6 @@ export const chatMessages = defineMessages({
     defaultMessage: 'Approve or reject the pending tool call above first.',
     description: 'Disabled composer placeholder while a system-assistant tool call awaits confirmation.',
   },
-  'chat.tool.a2aCall': {
-    defaultMessage: 'A2A Call',
-    description: 'Human-facing label for the framework promptAgent tool.',
-  },
-  'chat.tool.a2aCallWithAgent': {
-    defaultMessage: 'A2A Call ({agent})',
-    description: 'Human-facing label for the framework promptAgent tool. agent is the unchanged target agent slug.',
-  },
   'chat.tool.code': {
     defaultMessage: 'Code',
     description: 'Human-facing label for the framework run_js tool.',

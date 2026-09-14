@@ -36,10 +36,11 @@ type TelegramChatInfo struct {
 }
 
 type Service struct {
-	db        *db.DB
-	encryptor secrets.Store
-	telegram  TelegramDriver
-	logger    *zap.Logger
+	db         *db.DB
+	encryptor  secrets.Store
+	telegram   TelegramDriver
+	logger     *zap.Logger
+	linkSecret string
 }
 
 func New(d *db.DB, enc secrets.Store, telegram TelegramDriver, logger *zap.Logger) *Service {
@@ -63,15 +64,15 @@ func (s *Service) authorize(ctx context.Context, p authz.Principal) error {
 	return authz.Authorize(ctx, q, p, authz.TenantIdentityManage, uuid.Nil)
 }
 
-// PreviewInput carries everything Preview needs after the handler has
-// verified the HMAC signature: which bridge / platform, the external
-// uid, and the user's airlock-side principal.
+// PreviewInput is produced by VerifyLink. The private proof binds the public
+// projection to this configured service; scalar fields alone confer no authority.
 type PreviewInput struct {
 	Platform      string
 	BridgeID      uuid.UUID
 	UID           string
 	ChallengeHash string
 	ExpiresAt     time.Time
+	proof         *linkProof
 }
 
 // PreviewResult is the projection the handler turns into the proto
@@ -90,7 +91,7 @@ func (s *Service) Preview(ctx context.Context, p authz.Principal, in PreviewInpu
 	if err := s.authorize(ctx, p); err != nil {
 		return PreviewResult{}, err
 	}
-	if in.Platform == "" || in.BridgeID == uuid.Nil || in.UID == "" || in.ChallengeHash == "" || in.ExpiresAt.IsZero() {
+	if !in.validProof(s) || in.ExpiresAt.IsZero() {
 		return PreviewResult{}, service.Detail(service.ErrInvalidInput, "invalid identity link challenge")
 	}
 	q := dbq.New(s.db.Pool())
@@ -149,13 +150,14 @@ type LinkInput struct {
 	BridgeID      uuid.UUID
 	UID           string
 	ChallengeHash string
+	proof         *linkProof
 }
 
 func (s *Service) Link(ctx context.Context, p authz.Principal, in LinkInput) error {
 	if err := s.authorize(ctx, p); err != nil {
 		return err
 	}
-	if in.Platform == "" || in.BridgeID == uuid.Nil || in.UID == "" || in.ChallengeHash == "" {
+	if !(PreviewInput{Platform: in.Platform, BridgeID: in.BridgeID, UID: in.UID, ChallengeHash: in.ChallengeHash, proof: in.proof}).validProof(s) {
 		return service.Detail(service.ErrInvalidInput, "invalid identity link challenge")
 	}
 	q := dbq.New(s.db.Pool())

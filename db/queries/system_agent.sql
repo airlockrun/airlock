@@ -1,6 +1,5 @@
 -- system_agent: per-user chat conversations + messages + lightweight
--- runs + audit log for the in-airlock system agent. Schema lives in
--- migrations/002_a2a.sql.
+-- runs + audit log for the in-airlock system agent.
 
 -- name: CreateSystemConversation :one
 INSERT INTO system_conversations (user_id, title)
@@ -230,7 +229,7 @@ UPDATE system_runs
 SET status = @status,
     error_message = @error_message,
     finished_at = CASE WHEN @status IN ('complete', 'error', 'cancelled') THEN now() ELSE finished_at END
-WHERE id = @id;
+WHERE id = @id AND status = 'running';
 
 -- name: UpdateSystemRunLLMStats :exec
 -- Refreshes the run's token/call/cost aggregate from the llm_usage ledger

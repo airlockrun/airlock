@@ -15,6 +15,10 @@ import (
 // AuthorizeResource applies the central authenticated-user policy and then the
 // requested capability to a concrete management-plane resource.
 func AuthorizeResource(ctx context.Context, q *dbq.Queries, p Principal, action Action, resourceType string, resourceID uuid.UUID) error {
+	p, err := resourcePrincipal(ctx, q, p)
+	if err != nil {
+		return err
+	}
 	if err := Authorize(ctx, q, p, action, uuid.Nil); err != nil {
 		return err
 	}
@@ -41,6 +45,10 @@ func AuthorizeResource(ctx context.Context, q *dbq.Queries, p Principal, action 
 // AuthorizeResourceTransfer permits the current owner or a tenant administrator
 // to explicitly transfer ownership. It grants no other resource capability.
 func AuthorizeResourceTransfer(ctx context.Context, q *dbq.Queries, p Principal, resourceType string, resourceID uuid.UUID) error {
+	p, err := resourcePrincipal(ctx, q, p)
+	if err != nil {
+		return err
+	}
 	if err := Authorize(ctx, q, p, ResourceTransfer, uuid.Nil); err != nil {
 		return err
 	}
@@ -110,6 +118,10 @@ func ResourceCapabilitiesForDetail(ctx context.Context, q *dbq.Queries, p Princi
 }
 
 func resourceCapabilities(ctx context.Context, q *dbq.Queries, p Principal, resourceType string, resourceID uuid.UUID) ([]string, error) {
+	p, err := resourcePrincipal(ctx, q, p)
+	if err != nil {
+		return nil, err
+	}
 	owner, grants, err := loadResourceAccess(ctx, q, resourceType, resourceID)
 	if err != nil {
 		return nil, err
@@ -125,6 +137,42 @@ func resourceCapabilities(ctx context.Context, q *dbq.Queries, p Principal, reso
 		}
 	}
 	return capabilities, nil
+}
+
+func resourcePrincipal(ctx context.Context, q *dbq.Queries, p Principal) (Principal, error) {
+	if p.Identity != nil {
+		claims, err := p.Identity.Resolve(ctx, q)
+		if err != nil || claims.Subject != p.UserID.String() {
+			return Principal{}, apperr.ErrUnauthorized
+		}
+		if err := auth.RequireSecuredAccount(claims); err != nil {
+			return Principal{}, err
+		}
+		p.TenantRole = auth.Role(claims.TenantRole)
+	}
+	return p, nil
+}
+
+// AuthorizeResourceInventory returns the live grantee set and the policy-backed
+// tenant-wide view flag. Governance adds visibility, never bind/manage authority.
+func AuthorizeResourceInventory(ctx context.Context, q *dbq.Queries, p Principal) ([]pgtype.UUID, bool, error) {
+	p, err := resourcePrincipal(ctx, q, p)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := Authorize(ctx, q, p, ResourceInventoryView, uuid.Nil); err != nil {
+		return nil, false, err
+	}
+	governanceErr := Authorize(ctx, q, p, ResourceGovernanceView, uuid.Nil)
+	if governanceErr != nil && !errors.Is(governanceErr, apperr.ErrForbidden) {
+		return nil, false, governanceErr
+	}
+	set := p.GranteeSet()
+	principals := make([]pgtype.UUID, len(set))
+	for i, id := range set {
+		principals[i] = dbqUUID(id)
+	}
+	return principals, governanceErr == nil, nil
 }
 
 // SupportedResourceCapabilities returns the capabilities valid for a resource

@@ -2,13 +2,11 @@ package sysagent
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/systemchat"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -16,38 +14,34 @@ import (
 // destructiveTools lists every tool that mutates state and therefore
 // triggers the confirmation halt in the gated executor. Reads are
 // never destructive; every mutation is — including additive ones like
-// add_sibling and add_agent_member (they grant new capabilities).
+// add_agent_member (it grants new capabilities).
 //
 // Update this set whenever a new mutating tool lands. Code-review
 // rule: if a tool's name starts with create_/update_/delete_/set_/
 // trigger_/rollback_/cancel_/rotate_/unpin_/fire_/revoke_/clear_/
 // add_/remove_/connect_/disconnect_, it should be in this set.
 var destructiveTools = map[string]struct{}{
-	"create_agent":              {},
-	"update_agent":              {},
-	"delete_agent":              {},
-	"set_agent_lifecycle":       {},
-	"trigger_agent_upgrade":     {},
-	"rollback_agent":            {},
-	"cancel_build":              {},
-	"fire_schedule":             {},
-	"connect_git":               {},
-	"disconnect_git":            {},
-	"delete_git_credential":     {},
-	"create_tg_bot":             {},
-	"update_bridge":             {},
-	"delete_bridge":             {},
-	"revoke_connection":         {},
-	"revoke_mcp_credential":     {},
-	"revoke_mcp_oauth_app":      {},
-	"clear_env_var":             {},
-	"cancel_run":                {},
-	"add_sibling":               {},
-	"update_sibling_max_access": {},
-	"remove_sibling":            {},
-	"set_agent_sharing":         {},
-	"add_agent_member":          {},
-	"remove_agent_member":       {},
+	"create_agent":          {},
+	"update_agent":          {},
+	"delete_agent":          {},
+	"set_agent_lifecycle":   {},
+	"trigger_agent_upgrade": {},
+	"rollback_agent":        {},
+	"cancel_build":          {},
+	"fire_schedule":         {},
+	"connect_git":           {},
+	"disconnect_git":        {},
+	"delete_git_credential": {},
+	"create_tg_bot":         {},
+	"update_bridge":         {},
+	"delete_bridge":         {},
+	"revoke_connection":     {},
+	"revoke_mcp_credential": {},
+	"revoke_mcp_oauth_app":  {},
+	"clear_env_var":         {},
+	"cancel_run":            {},
+	"add_agent_member":      {},
+	"remove_agent_member":   {},
 }
 
 // isDestructiveTool reports whether a tool name requires confirmation
@@ -82,11 +76,11 @@ var tenantAxisTools = map[string]authz.Action{
 // The principal is needed only for the static filter; per-call
 // agent-level authorization happens inside each service method via
 // authz.Authorize.
-func (s *Service) buildToolSet(p authz.Principal) tool.Set {
+func (s *Service) buildToolSet(ctx context.Context, q *dbq.Queries, p authz.Principal) tool.Set {
 	set := tool.Set{}
 	for _, t := range s.allTools() {
 		if act, ok := tenantAxisTools[t.Name]; ok {
-			if !p.TenantRole.AtLeast(authz.RequiredTenantRole(act)) {
+			if !systemchat.ToolAvailable(ctx, q, p, act) {
 				continue
 			}
 		}
@@ -108,7 +102,7 @@ func (s *Service) allTools() []tool.Tool {
 	out = append(out, s.connectionTools()...)
 	out = append(out, s.envVarTools()...)
 	out = append(out, s.runTools()...)
-	out = append(out, s.siblingMemberTools()...)
+	out = append(out, s.memberTools()...)
 	out = append(out, s.deepLinkTools()...)
 	return out
 }
@@ -154,28 +148,3 @@ func resolveUUID(field, raw string) (uuid.UUID, error) {
 	}
 	return id, nil
 }
-
-// effectiveAccess wraps authz.EffectiveAgentAccess for callers that
-// only need the level (whoami, the your_access augmentation
-// fallback). Returns AccessPublic for a non-member caller.
-func effectiveAccess(ctx context.Context, q *dbq.Queries, p authz.Principal, agentID uuid.UUID) string {
-	return string(p.EffectiveAgentAccess(ctx, q, agentID))
-}
-
-// jsonBytes is a defensive marshal that never returns an error from
-// a tool body — if marshal fails (shouldn't, for service return
-// types) it falls back to "null" so the LLM at least sees something
-// parseable.
-func jsonBytes(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return json.RawMessage("null")
-	}
-	return b
-}
-
-// Compile-time witness that we import auth for the principal layer
-// — keeps the import non-dead while individual tool files reference
-// it (or don't) depending on what they need.
-var _ = auth.Role("")
-var _ = fmt.Sprintf

@@ -1,0 +1,103 @@
+name: public-release
+
+run-name: Release ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Public release version, such as v0.6.3
+        required: true
+        type: string
+      commit:
+        description: Public release PR merge commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Validate release
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          if ! [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(rc|alpha|beta|dev)\.(0|[1-9][0-9]*))?$ ]]; then
+            echo "::error::invalid release version: $VERSION"
+            exit 1
+          fi
+          if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::commit must be a full Git object ID"
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$COMMIT" ]; then
+            echo "::error::checkout does not match requested commit"
+            exit 1
+          fi
+          git fetch origin main --tags
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "::error::release commit is not on public main"
+            exit 1
+          fi
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "::error::tag $VERSION already exists"
+            exit 1
+          fi
+          source_version=$(awk -F'"' '/^const Version =/ {print $2; exit}' ./*.go)
+          if [ "v$source_version" != "$VERSION" ]; then
+            echo "::error::source Version is v$source_version, not $VERSION"
+            exit 1
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: airlockvet
+        env:
+          GOWORK: off
+        run: go run ./cmd/airlockvet ./...
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify published images and executor smoke
+        env:
+          GOWORK: off
+          VERSION: ${{ inputs.version }}
+        run: go run ./scripts/js-executor-check/release/main.go --source . --version "$VERSION" --public
+
+  tag:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: release-token
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.release-token.outputs.token }}
+      - name: Create tag
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" "$COMMIT" -m "Airlock $VERSION"
+          git push origin "refs/tags/$VERSION"

@@ -2,39 +2,22 @@
 -- All "starts at zero/empty" run fields passed explicitly per AGENTS.md
 -- "no fake defaults" rule. Counter fields start at 0 (no LLM calls /
 -- tokens / cost yet); buffered text fields start ''; actions starts [].
--- parent_run_id is NULL for top-level (web/bridge/cron/webhook) runs
--- and the caller's run id for A2A child runs.
+-- Origin and execution kind are supplied by host admission, never the payload.
 INSERT INTO runs (
-    agent_id, bridge_id, parent_run_id, status, error_kind,
+    agent_id, bridge_id, origin_id, execution_kind, resume_run_id, status, error_kind,
     input_payload, source_ref, trigger_type, trigger_ref,
     caller_user_id, caller_conversation_id, caller_access,
     actions, llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
     stdout_log, error_message, panic_trace, compacted
 )
 VALUES (
-    @agent_id, @bridge_id, @parent_run_id, 'running', '',
+    @agent_id, @bridge_id, @origin_id, @execution_kind, @resume_run_id, 'running', '',
     @input_payload, @source_ref, @trigger_type, @trigger_ref,
     @caller_user_id, @caller_conversation_id, @caller_access,
     '[]'::jsonb, 0, 0, 0, 0, 0,
     '', '', '', false
 )
 RETURNING *;
-
--- name: GetDescendantRuns :many
--- Recursive descent through parent_run_id for cancel cascade. Returns
--- every run reachable from @root_run_id via parent_run_id (excluding
--- the root itself). Order is unspecified; callers fire cancel funcs
--- independently per row.
-WITH RECURSIVE descendants AS (
-    SELECT id, agent_id, parent_run_id, status
-    FROM runs
-    WHERE runs.parent_run_id = @root_run_id
-    UNION ALL
-    SELECT r.id, r.agent_id, r.parent_run_id, r.status
-    FROM runs r
-    JOIN descendants d ON r.parent_run_id = d.id
-)
-SELECT id, agent_id, status FROM descendants;
 
 -- name: UpdateRunComplete :exec
 UPDATE runs SET
@@ -49,39 +32,20 @@ UPDATE runs SET
 WHERE id = @id;
 
 -- name: UpsertRunComplete :execrows
--- Recovery path: row may not exist if CreateRun never landed. All
--- "starts empty" fields (llm counters, compacted) passed explicitly.
--- trigger_type/trigger_ref/source_ref placeholders apply only when the
--- row is brand-new — the agent's r.Complete arrives without trigger
--- context; the dispatcher's CreateRun would have set the real values.
-INSERT INTO runs (
-    id, agent_id, status, error_message, error_kind, actions,
-    stdout_log, panic_trace, checkpoint, input_payload, source_ref,
-    trigger_type, trigger_ref, finished_at, duration_ms,
-    caller_user_id, caller_conversation_id, caller_access,
-    llm_calls, llm_tokens_in, llm_tokens_out, llm_tokens_cached, llm_cost_estimate,
-    compacted
-)
-VALUES (
-    @id, @agent_id, @status, @error_message, @error_kind, @actions,
-    @stdout_log, @panic_trace, @checkpoint, '{}'::jsonb, '',
-    'prompt', '', now(), 0,
-    NULL, NULL, 'public',
-    0, 0, 0, 0, 0,
-    false
-)
-ON CONFLICT (id) DO UPDATE SET
-    status = EXCLUDED.status,
-    error_message = EXCLUDED.error_message,
-    error_kind = EXCLUDED.error_kind,
-    actions = EXCLUDED.actions,
-    stdout_log = EXCLUDED.stdout_log,
-    panic_trace = EXCLUDED.panic_trace,
-    checkpoint = EXCLUDED.checkpoint,
+-- Completion cannot manufacture an unadmitted run or overwrite host origin.
+UPDATE runs SET
+    status = @status,
+    error_message = @error_message,
+    error_kind = @error_kind,
+    actions = @actions,
+    stdout_log = @stdout_log,
+    panic_trace = @panic_trace,
+    checkpoint = @checkpoint,
     finished_at = now(),
     duration_ms = (EXTRACT(EPOCH FROM (now() - runs.started_at)) * 1000)::integer
-WHERE runs.agent_id = EXCLUDED.agent_id
-  AND runs.status = 'running';
+WHERE runs.id = @id AND runs.agent_id = @agent_id
+  AND runs.status = 'running'
+  AND runs.runtime_owner_token IS NULL;
 
 -- name: GetRunByID :one
 SELECT * FROM runs WHERE id = $1;
@@ -93,34 +57,6 @@ SELECT * FROM runs WHERE id = @id AND agent_id = @agent_id;
 SELECT id FROM runs
 WHERE id = @id AND agent_id = @agent_id AND status = 'running'
 FOR UPDATE;
-
--- name: ClaimMCPTaskResume :execrows
--- A suspended MCP task is single-use. The conversation reference is part of
--- the CAS so a stale or inconsistent context/task pair cannot consume it.
-UPDATE runs SET status = 'success'
-WHERE id = @id
-  AND agent_id = @agent_id
-  AND status = 'suspended'
-  AND trigger_type = 'a2a'
-  AND trigger_ref = @trigger_ref;
-
--- name: RollbackMCPTaskResume :execrows
--- Restore a claimed task only when dispatch did not create a successor. Once a
--- successor row exists, that run owns the resume attempt even if forwarding it
--- to the agent later fails.
-UPDATE runs AS resumed SET status = 'suspended'
-WHERE resumed.id = @id
-  AND resumed.agent_id = @agent_id
-  AND resumed.status = 'success'
-  AND resumed.trigger_type = 'a2a'
-  AND resumed.trigger_ref = @trigger_ref
-  AND NOT EXISTS (
-      SELECT 1 FROM runs AS successor
-      WHERE successor.agent_id = resumed.agent_id
-        AND successor.trigger_type = 'a2a'
-        AND successor.trigger_ref = resumed.trigger_ref
-        AND successor.input_payload->>'resumeRunId' = resumed.id::text
-  );
 
 -- name: ListRunsByAgent :many
 SELECT * FROM runs
@@ -151,13 +87,7 @@ ORDER BY started_at DESC
 LIMIT 1;
 
 -- name: GetLatestSuspendedRunByConversation :one
--- Conversation-scoped suspended-run lookup. trigger_ref holds the
--- conversation id for both web (trigger_type='prompt') and sibling
--- (trigger_type='a2a') runs, and those live on distinct conversation
--- rows — so scoping by trigger_ref keeps a web/bridge resume, the
--- conversation view, and /clear from ever picking up an A2A
--- delegated suspension that belongs to a different surface (the
--- agent-wide GetLatestSuspendedRun cannot distinguish them).
+-- Conversation-scoped display lookup for the web and bridge surfaces.
 SELECT * FROM runs
 WHERE trigger_ref = @conversation_id AND status = 'suspended'
 ORDER BY started_at DESC
@@ -202,7 +132,7 @@ UPDATE runs SET
     status = @status,
     finished_at = COALESCE(finished_at, now()),
     duration_ms = COALESCE(NULLIF(duration_ms, 0), (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer)
-WHERE id = @id AND status = 'running';
+WHERE id = @id AND status = 'running' AND runtime_owner_token IS NULL;
 
 -- name: CancelRun :execrows
 UPDATE runs SET
@@ -227,31 +157,13 @@ WHERE id = @id AND status = 'running';
 UPDATE runs SET status = 'success', finished_at = now()
 WHERE id = @id AND status = 'suspended';
 
--- name: RollbackPromptRunResume :execrows
--- Restore a claimed prompt suspension only when dispatch did not create a
--- successor. A successor carrying resumeRunId owns the attempt even if its
--- subsequent container request fails.
-UPDATE runs AS resumed SET status = 'suspended', finished_at = NULL
-WHERE resumed.id = @id
-  AND resumed.agent_id = @agent_id
-  AND resumed.status = 'success'
-  AND resumed.trigger_type = 'prompt'
-  AND resumed.trigger_ref = @trigger_ref
-  AND NOT EXISTS (
-      SELECT 1 FROM runs AS successor
-      WHERE successor.agent_id = resumed.agent_id
-        AND successor.trigger_type = 'prompt'
-        AND successor.trigger_ref = resumed.trigger_ref
-        AND successor.input_payload->>'resumeRunId' = resumed.id::text
-  );
-
 -- name: ListStuckRuns :many
 -- Runs presumed dead because they haven't seen a terminal status update
 -- past the cutoff (started_at + outer dispatcher timeout + grace).
 -- The sweeper marks them error/agent-disconnected, synthesizes orphan
 -- tool-results, and publishes a synthetic run.error WS event.
 SELECT id, agent_id FROM runs
-WHERE status = 'running' AND trigger_type <> 'job' AND started_at < @cutoff;
+WHERE status = 'running' AND trigger_type <> 'job' AND execution_kind <> 'agent' AND runtime_owner_token IS NULL AND started_at < @cutoff;
 
 -- name: FailStuckRun :execrows
 UPDATE runs
@@ -259,7 +171,7 @@ SET status = 'error',
     error_message = 'agent disconnected',
     finished_at = now(),
     duration_ms = (EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::integer
-WHERE id = $1 AND status = 'running' AND trigger_type <> 'job';
+WHERE id = $1 AND status = 'running' AND trigger_type <> 'job' AND execution_kind <> 'agent' AND runtime_owner_token IS NULL;
 
 -- name: CompactOldRuns :execrows
 -- Nullify verbose fields on terminal runs older than the cutoff.

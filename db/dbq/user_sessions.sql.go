@@ -13,8 +13,12 @@ import (
 
 const cleanupExpiredUserSessions = `-- name: CleanupExpiredUserSessions :execrows
 DELETE FROM user_sessions
-WHERE expires_at < now() - interval '30 days'
-   OR (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days')
+WHERE (expires_at < now() - interval '30 days'
+   OR (revoked_at IS NOT NULL AND revoked_at < now() - interval '30 days'))
+AND NOT EXISTS (
+    SELECT 1 FROM execution_origins o JOIN agent_jobs j ON j.origin_id = o.id
+    WHERE o.session_id = user_sessions.id AND j.status IN ('queued','running')
+)
 `
 
 func (q *Queries) CleanupExpiredUserSessions(ctx context.Context) (int64, error) {

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
@@ -173,11 +172,11 @@ func (s *Service) ListGroups(ctx context.Context, p authz.Principal) ([]Group, e
 	if err := authz.Authorize(ctx, q, p, authz.ConnectorGroupManage, uuid.Nil); err != nil {
 		return nil, err
 	}
-	principals := make([]pgtype.UUID, len(p.GranteeSet()))
-	for i, id := range p.GranteeSet() {
-		principals[i] = pg(id)
+	principals, governanceView, err := authz.AuthorizeResourceInventory(ctx, q, p)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := q.ListConnectorTargetGroups(ctx, dbq.ListConnectorTargetGroupsParams{PrincipalIds: principals, GovernanceView: p.TenantRole == auth.RoleAdmin})
+	rows, err := q.ListConnectorTargetGroups(ctx, dbq.ListConnectorTargetGroupsParams{PrincipalIds: principals, GovernanceView: governanceView})
 	if err != nil {
 		return nil, err
 	}

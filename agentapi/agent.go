@@ -1,50 +1,27 @@
 package agentapi
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"net/http"
-	"regexp"
-	"strings"
-
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/agentsdk/wire"
-	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/builder"
-	"github.com/airlockrun/airlock/compat"
 	"github.com/airlockrun/airlock/db"
-	"github.com/airlockrun/airlock/db/dbq"
-	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/service/agentruns"
 	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
+	"github.com/airlockrun/airlock/service/appruntime"
 	connectordirectoriessvc "github.com/airlockrun/airlock/service/connectordirectories"
 	connectorjobssvc "github.com/airlockrun/airlock/service/connectorjobs"
 	connectororchestrationsvc "github.com/airlockrun/airlock/service/connectororchestration"
-	connectorssvc "github.com/airlockrun/airlock/service/connectors"
 	jobssvc "github.com/airlockrun/airlock/service/jobs"
+	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	"github.com/airlockrun/airlock/storage"
-	"github.com/airlockrun/airlock/trigger"
-	solprovider "github.com/airlockrun/sol/provider"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 )
 
-// scheduleReconciler is the subset of trigger.Scheduler the Sync handler needs.
-type scheduleReconciler interface {
-	ReconcileAgentTx(ctx context.Context, tx pgx.Tx, agentID uuid.UUID, tokenVersion int64, definitions []wire.JobCronDef) error
-	Wake()
-}
-
 type Handler struct {
+	agentRuns              *agentruns.Service
+	runtime                *runtimesvc.Service
 	db                     *db.DB
 	encryptor              secrets.Store
 	oauthClient            *oauth.Client
@@ -54,16 +31,13 @@ type Handler struct {
 	connectorJobs          *connectorjobssvc.Service
 	connectorDirectories   *connectordirectoriessvc.Service
 	connectorOrchestration *connectororchestrationsvc.Service
-	builder                *builder.BuildService
+	builder                runtimesvc.UpgradeRunner
 	pubsub                 *realtime.PubSub
-	bridgeMgr              BridgePartsDeliverer // for output()/topic bridge delivery
-	scheduler              scheduleReconciler
+	bridgeMgr              runtimesvc.BridgePartsDeliverer // for output()/topic bridge delivery
+	scheduler              appruntime.ScheduleReconciler
 	publicURL              string
 	agentBaseURL           func(slug string) string // {scheme}://{slug}.{domain}[:port] — from config.Config (single source)
-	llmProxyURL            string                   // optional: route LLM calls through this proxy
-	forceInlineAttachments bool                     // dev escape hatch — ignore provider URL capability, send everything as base64
-	jwtSecret              string                   // shared with auth middleware; read by mcp_server.go to validate incoming A2A JWTs
-	dispatcher             *trigger.Dispatcher      // forward-prompt + ensure-running for A2A
+	jwtSecret              string                   // validates external MCP user and OAuth credentials
 	httpNetwork            *networkpolicy.Policy
 	logger                 *zap.Logger
 }
@@ -72,6 +46,8 @@ type Handler struct {
 // fields of Handler one-for-one; api/router.go's RouterConfig
 // translates its own merged config into this on wire-up.
 type Config struct {
+	AgentRuns              *agentruns.Service
+	Runtime                *runtimesvc.Service
 	DB                     *db.DB
 	Encryptor              secrets.Store
 	OAuthClient            *oauth.Client
@@ -83,14 +59,11 @@ type Config struct {
 	ConnectorOrchestration *connectororchestrationsvc.Service
 	Builder                *builder.BuildService
 	PubSub                 *realtime.PubSub
-	BridgeMgr              BridgePartsDeliverer
-	Scheduler              scheduleReconciler
+	BridgeMgr              runtimesvc.BridgePartsDeliverer
+	Scheduler              appruntime.ScheduleReconciler
 	PublicURL              string
 	AgentBaseURL           func(slug string) string
-	LLMProxyURL            string
-	ForceInlineAttachments bool
 	JWTSecret              string
-	Dispatcher             *trigger.Dispatcher
 	HTTPNetwork            *networkpolicy.Policy
 	Logger                 *zap.Logger
 }
@@ -98,6 +71,12 @@ type Config struct {
 // New constructs the agent-internal HTTP surface. Fail-loud on nil
 // deps — every required field is mandatory (airlock fail-loud rule).
 func New(c Config) *Handler {
+	if c.AgentRuns == nil {
+		panic("agentapi: agent runs service is required")
+	}
+	if c.Runtime == nil {
+		panic("agentapi: runtime service is required")
+	}
 	if c.DB == nil {
 		panic("agentapi: db is required")
 	}
@@ -107,8 +86,8 @@ func New(c Config) *Handler {
 	if c.PubSub == nil {
 		panic("agentapi: pubsub is required")
 	}
-	if c.Dispatcher == nil {
-		panic("agentapi: dispatcher is required")
+	if c.Builder == nil || c.OAuthClient == nil || c.S3 == nil || c.BridgeMgr == nil || c.AgentBaseURL == nil {
+		panic("agentapi: app runtime dependencies are required")
 	}
 	if c.Logger == nil {
 		panic("agentapi: logger is required")
@@ -135,6 +114,8 @@ func New(c Config) *Handler {
 		panic("agentapi: scheduler is required")
 	}
 	return &Handler{
+		agentRuns:              c.AgentRuns,
+		runtime:                c.Runtime,
 		db:                     c.DB,
 		encryptor:              c.Encryptor,
 		oauthClient:            c.OAuthClient,
@@ -150,859 +131,8 @@ func New(c Config) *Handler {
 		scheduler:              c.Scheduler,
 		publicURL:              c.PublicURL,
 		agentBaseURL:           c.AgentBaseURL,
-		llmProxyURL:            c.LLMProxyURL,
-		forceInlineAttachments: c.ForceInlineAttachments,
 		jwtSecret:              c.JWTSecret,
-		dispatcher:             c.Dispatcher,
 		httpNetwork:            c.HTTPNetwork,
 		logger:                 c.Logger,
 	}
-}
-
-// BridgePartsDeliverer is the subset of trigger.BridgeManager needed for message delivery.
-type BridgePartsDeliverer interface {
-	SendParts(ctx context.Context, bridgeID uuid.UUID, externalID string, parts []wire.DisplayPart) error
-}
-
-// recordConnectionNeed upserts the agent's connection need, carrying the full
-// declared template as spec so the resource can be instantiated from it on
-// configure. It does not create or bind a resource — that happens when a user
-// configures credentials.
-func (h *Handler) recordConnectionNeed(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, slug string, def wire.ConnectionDef, scopes string, authInjection, authParams, headers []byte) error {
-	spec, err := json.Marshal(map[string]any{
-		"name":               def.Name,
-		"auth_mode":          string(def.AuthMode),
-		"auth_url":           def.AuthURL,
-		"token_url":          def.TokenURL,
-		"base_url":           def.BaseURL,
-		"scopes":             scopes,
-		"auth_injection":     json.RawMessage(authInjection),
-		"auth_params":        json.RawMessage(authParams),
-		"headers":            json.RawMessage(headers),
-		"llm_hint":           def.LLMHint,
-		"access":             string(def.Access),
-		"setup_instructions": def.SetupInstructions,
-	})
-	if err != nil {
-		return err
-	}
-	return q.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
-		AgentID:           toPgUUID(agentID),
-		Type:              "connection",
-		Slug:              slug,
-		Description:       def.Description,
-		SetupInstructions: def.SetupInstructions,
-		ExpectedUrl:       def.BaseURL,
-		ExpectedScopes:    scopes,
-		Spec:              spec,
-	})
-}
-
-// CreateRun handles POST /api/agent/run/create.
-// Called by agent containers to create a run record for programmatic runs (e.g. from route handlers).
-func (h *Handler) CreateRun(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-
-	var req wire.CreateRunRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.TriggerType == "" {
-		req.TriggerType = "code"
-	}
-	if req.TriggerType != "code" && req.TriggerType != "background" {
-		writeJSONError(w, http.StatusBadRequest, "invalid triggerType")
-		return
-	}
-	if req.CallerAccess == "" {
-		req.CallerAccess = wire.Access(agentsdk.AccessPublic)
-	}
-	if req.CallerAccess != wire.Access(agentsdk.AccessPublic) && req.CallerAccess != wire.Access(agentsdk.AccessUser) && req.CallerAccess != wire.Access(agentsdk.AccessAdmin) {
-		writeJSONError(w, http.StatusBadRequest, "invalid callerAccess")
-		return
-	}
-	var callerUserID, callerConversationID pgtype.UUID
-	if req.UserID != "" {
-		id, err := parseUUID(req.UserID)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid userId")
-			return
-		}
-		callerUserID = toPgUUID(id)
-	}
-	if req.ConversationID != "" {
-		id, err := parseUUID(req.ConversationID)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid conversationId")
-			return
-		}
-		callerConversationID = toPgUUID(id)
-	}
-
-	q := dbq.New(h.db.Pool())
-
-	var sourceRef string
-	if agent, err := q.GetAgentByID(r.Context(), toPgUUID(agentID)); err == nil {
-		sourceRef = agent.SourceRef
-	}
-
-	run, err := q.CreateRun(r.Context(), dbq.CreateRunParams{
-		AgentID:              toPgUUID(agentID),
-		InputPayload:         []byte("{}"),
-		SourceRef:            sourceRef,
-		TriggerType:          req.TriggerType,
-		TriggerRef:           req.TriggerRef,
-		CallerUserID:         callerUserID,
-		CallerConversationID: callerConversationID,
-		CallerAccess:         string(req.CallerAccess),
-	})
-	if err != nil {
-		h.logger.Error("create run failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to create run")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, wire.CreateRunResponse{
-		RunID: pgUUID(run.ID).String(),
-	})
-}
-
-// Sync handles PUT /api/agent/sync.
-// normalizeToolInputSchema ensures a synced tool's input schema is a JSON object
-// schema. A tool's input is always an object of named arguments; a no-argument
-// tool can reflect to {"type":"null"} (or arrive empty), which strict tool / MCP
-// schema validators (OpenAI function-calling, ChatGPT's MCP client) reject.
-// Coerce to an empty object schema, and warn loudly when the agent declared a
-// non-empty, non-object schema so the agentsdk-level root cause stays visible
-// (it should be fixed by rebuilding the agent, not by relying on this fallback).
-func normalizeToolInputSchema(raw []byte, tool string, agentID uuid.UUID, lg *zap.Logger) []byte {
-	var m map[string]any
-	if json.Unmarshal(raw, &m) == nil {
-		if t, _ := m["type"].(string); t == "object" {
-			return raw
-		}
-	}
-	if s := strings.TrimSpace(string(raw)); s != "" && s != "{}" {
-		lg.Warn("agent tool has a non-object input schema; coercing to object for MCP/tool compatibility",
-			zap.String("agent_id", agentID.String()),
-			zap.String("tool", tool),
-			zap.ByteString("input_schema", raw),
-			zap.String("hint", "rebuild the agent against an agentsdk that emits object-typed tool inputs"))
-	}
-	return []byte(`{"type":"object","properties":{}}`)
-}
-
-func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
-	agentID := auth.AgentIDFromContext(r.Context())
-	pgAgentID := toPgUUID(agentID)
-
-	var req wire.SyncRequest
-	if err := readJSON(r, &req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	q := dbq.New(h.db.Pool())
-	ctx := r.Context()
-	jobHandlers, err := h.preflightJobHandlers(ctx, agentID, req.JobHandlers)
-	if err != nil {
-		h.writeJobHandlerSyncError(w, err)
-		return
-	}
-	req.JobHandlers = jobHandlers
-	for _, directory := range req.Directories {
-		canonical, pathErr := storage.CleanAgentPath(directory.Path)
-		if pathErr != nil || canonical != directory.Path ||
-			!validDirectoryAccess(directory.Read) || !validDirectoryAccess(directory.Write) || !validDirectoryAccess(directory.List) ||
-			!validDirectoryScope(directory.Scope) || directory.RetentionHours < 0 {
-			writeJSONError(w, http.StatusBadRequest, "invalid directory declaration: "+directory.Path)
-			return
-		}
-	}
-
-	// Validate the reported agentsdk version against what this airlock
-	// process was built against. A mismatch means the container image is
-	// stale relative to this airlock — reject the sync so the container
-	// exits and surface a persistent error the operator sees in the UI.
-	if req.Version != "" {
-		if err := compat.CheckSDKVersion(req.Version); err != nil {
-			_ = q.UpdateAgentErrorMessage(ctx, dbq.UpdateAgentErrorMessageParams{
-				ID:           pgAgentID,
-				ErrorMessage: err.Error(),
-			})
-			writeJSONError(w, http.StatusConflict, err.Error())
-			return
-		}
-	}
-	tokenVersion := auth.AgentTokenVersionFromContext(ctx)
-	if err := h.reconcileJobManifest(ctx, agentID, tokenVersion, req.JobHandlers, req.JobCrons); err != nil {
-		switch {
-		case errors.Is(err, trigger.ErrInvalidJobCron), errors.Is(err, jobssvc.ErrInvalidJobCron):
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, trigger.ErrStaleJobCrons):
-			writeJSONError(w, http.StatusUnauthorized, err.Error())
-		default:
-			h.writeJobHandlerSyncError(w, err)
-		}
-		return
-	}
-	if req.Version != "" {
-		_ = q.UpdateAgentSDKVersion(ctx, dbq.UpdateAgentSDKVersionParams{
-			ID:         pgAgentID,
-			SdkVersion: req.Version,
-		})
-		// Clear any stale compatibility error now that the sync succeeded.
-		_ = q.UpdateAgentErrorMessage(ctx, dbq.UpdateAgentErrorMessageParams{
-			ID:           pgAgentID,
-			ErrorMessage: "",
-		})
-	}
-	if req.Description != "" {
-		_ = q.UpdateAgentDescription(ctx, dbq.UpdateAgentDescriptionParams{
-			ID:          pgAgentID,
-			Description: req.Description,
-		})
-	}
-	// Emoji is cosmetic: persist a sane value, otherwise drop it (never
-	// fail the whole sync over decoration). cleanAgentEmoji bounds
-	// length and strips control chars without enforcing a single rune
-	// (ZWJ / skin-tone / flag emoji are multi-codepoint).
-	if e, ok := cleanAgentEmoji(req.Emoji); ok {
-		_ = q.UpdateAgentEmoji(ctx, dbq.UpdateAgentEmojiParams{
-			ID:    pgAgentID,
-			Emoji: e,
-		})
-	}
-
-	// Sync is authoritative for instructions — absent field resets to
-	// empty so removing an AddInstruction call and resyncing wipes stale
-	// fragments.
-	extrasJSON := []byte("[]")
-	if len(req.Instructions) > 0 {
-		if b, err := json.Marshal(req.Instructions); err == nil {
-			extrasJSON = b
-		}
-	}
-	_ = q.UpdateAgentInstructions(ctx, dbq.UpdateAgentInstructionsParams{
-		ID:           pgAgentID,
-		Instructions: extrasJSON,
-	})
-
-	// Upsert environment declarations, then delete stale rows. The configured
-	// value belongs to the operator and survives while its slug stays declared.
-	envVarSlugs := make([]string, len(req.EnvVars))
-	for i, envVar := range req.EnvVars {
-		if envVar.Slug == "" {
-			writeJSONError(w, http.StatusBadRequest, "invalid environment variable declaration: slug is required")
-			return
-		}
-		if envVar.Pattern != "" {
-			if _, err := regexp.Compile(envVar.Pattern); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "invalid environment variable pattern: "+err.Error())
-				return
-			}
-		}
-		if _, err := q.UpsertAgentEnvVar(ctx, dbq.UpsertAgentEnvVarParams{
-			AgentID:      pgAgentID,
-			Slug:         envVar.Slug,
-			Description:  envVar.Description,
-			IsSecret:     envVar.Secret,
-			DefaultValue: envVar.Default,
-			Pattern:      envVar.Pattern,
-		}); err != nil {
-			h.logger.Error("upsert environment variable failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync environment variables")
-			return
-		}
-		envVarSlugs[i] = envVar.Slug
-	}
-	if err := q.DeleteStaleAgentEnvVars(ctx, dbq.DeleteStaleAgentEnvVarsParams{
-		AgentID: pgAgentID,
-		Slugs:   envVarSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale environment variables failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync environment variables")
-		return
-	}
-
-	// Upsert tools, then delete stale.
-	toolNames := make([]string, len(req.Tools))
-	for i, t := range req.Tools {
-		toolNames[i] = t.Name
-		inSchema := normalizeToolInputSchema([]byte(t.InputSchema), t.Name, agentID, h.logger)
-		outSchema := []byte(t.OutputSchema)
-		if len(outSchema) == 0 {
-			outSchema = []byte("{}")
-		}
-		_ = q.UpsertAgentTool(ctx, dbq.UpsertAgentToolParams{
-			AgentID:      pgAgentID,
-			Name:         t.Name,
-			Description:  t.Description,
-			LlmHint:      t.LLMHint,
-			Access:       string(t.Access),
-			InputSchema:  inSchema,
-			OutputSchema: outSchema,
-		})
-	}
-	_ = q.DeleteStaleAgentTools(ctx, dbq.DeleteStaleAgentToolsParams{
-		AgentID: pgAgentID,
-		Names:   toolNames,
-	})
-
-	// Tool-set change detection: hash the current set, compare to the
-	// stored hash, and trigger a sibling-update broadcast on mismatch.
-	// Avoids fan-out churn when an agent re-syncs unchanged state on
-	// container restart (the common case).
-	currentTools, terr := q.ListAgentTools(ctx, pgAgentID)
-	if terr == nil {
-		newHash := computeToolsHash(currentTools)
-		// Lazy fetch agent to compare prior hash. Cheap — single PK lookup.
-		if prior, perr := q.GetAgentByID(ctx, pgAgentID); perr == nil {
-			if !bytesEqual(prior.ToolsHash, newHash) {
-				_ = q.UpdateAgentToolsHash(ctx, dbq.UpdateAgentToolsHashParams{
-					ID:        pgAgentID,
-					ToolsHash: newHash,
-				})
-				go broadcastSiblingChange(context.Background(), dbq.New(h.db.Pool()), h.dispatcher, h.logger, agentID)
-			}
-		}
-	}
-
-	// Upsert model slots, then delete stale. Upsert preserves the admin's
-	// assigned_model across syncs — only the declaration fields update.
-	slotSlugs := make([]string, len(req.ModelSlots))
-	for i, s := range req.ModelSlots {
-		slotSlugs[i] = s.Slug
-		_ = q.UpsertAgentModelSlot(ctx, dbq.UpsertAgentModelSlotParams{
-			AgentID:     pgAgentID,
-			Slug:        s.Slug,
-			Capability:  s.Capability,
-			Description: s.Description,
-		})
-	}
-	_ = q.DeleteStaleAgentModelSlots(ctx, dbq.DeleteStaleAgentModelSlotsParams{
-		AgentID: pgAgentID,
-		Slugs:   slotSlugs,
-	})
-
-	// Upsert webhooks, then delete stale.
-	paths := make([]string, len(req.Webhooks))
-	for i, wh := range req.Webhooks {
-		timeoutMs := int32(wh.TimeoutMs)
-		if timeoutMs == 0 {
-			timeoutMs = 120000
-		}
-		if err := q.UpsertWebhook(ctx, dbq.UpsertWebhookParams{
-			AgentID:      pgAgentID,
-			Path:         wh.Path,
-			VerifyMode:   wh.Verify,
-			VerifyHeader: wh.Header,
-			TimeoutMs:    timeoutMs,
-			Description:  wh.Description,
-		}); err != nil {
-			h.logger.Error("upsert webhook failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-			return
-		}
-		if wh.Verify != "" && wh.Verify != "none" {
-			row, err := q.GetWebhookByAgentAndPath(ctx, dbq.GetWebhookByAgentAndPathParams{
-				AgentID: pgAgentID,
-				Path:    wh.Path,
-			})
-			if err != nil {
-				h.logger.Error("load webhook after upsert failed", zap.Error(err))
-				writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-				return
-			}
-			if row.Secret == "" {
-				secretBytes := make([]byte, 32)
-				if _, err := rand.Read(secretBytes); err != nil {
-					h.logger.Error("generate webhook secret failed", zap.Error(err))
-					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-					return
-				}
-				ref := "webhook/" + pgUUID(row.ID).String() + "/secret"
-				stored, err := h.encryptor.Put(ctx, ref, hex.EncodeToString(secretBytes))
-				if err != nil {
-					h.logger.Error("encrypt webhook secret failed", zap.Error(err))
-					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-					return
-				}
-				if err := q.UpdateWebhookSecret(ctx, dbq.UpdateWebhookSecretParams{ID: row.ID, Secret: stored}); err != nil {
-					h.logger.Error("persist webhook secret failed", zap.Error(err))
-					writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-					return
-				}
-			}
-		}
-		paths[i] = wh.Path
-	}
-	if err := q.DeleteWebhooksByAgentExcept(ctx, dbq.DeleteWebhooksByAgentExceptParams{
-		AgentID: pgAgentID,
-		Paths:   paths,
-	}); err != nil {
-		h.logger.Error("delete stale webhooks failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync webhooks")
-		return
-	}
-
-	// Upsert routes, then delete stale.
-	routeKeys := make([]string, len(req.Routes))
-	for i, rt := range req.Routes {
-		if err := q.UpsertRoute(ctx, dbq.UpsertRouteParams{
-			AgentID:     pgAgentID,
-			Path:        rt.Path,
-			Method:      rt.Method,
-			Access:      string(rt.Access),
-			Description: rt.Description,
-		}); err != nil {
-			h.logger.Error("upsert route failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync routes")
-			return
-		}
-		routeKeys[i] = rt.Path + "|" + rt.Method
-	}
-	if err := q.DeleteRoutesByAgentExcept(ctx, dbq.DeleteRoutesByAgentExceptParams{
-		AgentID: pgAgentID,
-		Keys:    routeKeys,
-	}); err != nil {
-		h.logger.Error("delete stale routes failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync routes")
-		return
-	}
-
-	// Upsert topics, then delete stale.
-	topicSlugs := make([]string, len(req.Topics))
-	for i, t := range req.Topics {
-		if err := q.UpsertTopic(ctx, dbq.UpsertTopicParams{
-			AgentID:     pgAgentID,
-			Slug:        t.Slug,
-			Description: t.Description,
-			LlmHint:     t.LLMHint,
-			Access:      string(t.Access),
-			PerUser:     t.PerUser,
-		}); err != nil {
-			h.logger.Error("upsert topic failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")
-			return
-		}
-		topicSlugs[i] = t.Slug
-	}
-	if err := q.DeleteTopicsByAgentExcept(ctx, dbq.DeleteTopicsByAgentExceptParams{
-		AgentID: pgAgentID,
-		Slugs:   topicSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale topics failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync topics")
-		return
-	}
-
-	// Upsert MCP servers, then delete stale.
-	// Resource-need mutations share the agent -> ordered need -> resource lock
-	// hierarchy with operator binding and OAuth transactions. Keeping all three
-	// declaration types in one short transaction also makes scope expansion
-	// visible atomically to runtime token checks.
-	needsTx, err := h.db.Pool().Begin(ctx)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to begin resource sync")
-		return
-	}
-	defer needsTx.Rollback(ctx)
-	needsQ := dbq.New(needsTx)
-	if _, err := needsQ.GetAgentByIDForUpdate(ctx, pgAgentID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to lock agent for resource sync")
-		return
-	}
-	mcpSlugs := make([]string, len(req.MCPServers))
-	for i, mcp := range req.MCPServers {
-		scopes := oauth.CanonicalScopeSet(mcp.Scopes)
-		authInjection, err := json.Marshal(mcp.AuthInjection)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for MCP "+mcp.Slug)
-			return
-		}
-		// Sync owns only the agent-local declaration. Resource authorization and
-		// bindings are operator-managed state and are never changed here.
-		mcpSpec, _ := json.Marshal(map[string]any{
-			"name": mcp.Name, "url": mcp.URL, "auth_mode": string(mcp.AuthMode),
-			"auth_url": mcp.AuthURL, "token_url": mcp.TokenURL, "scopes": scopes,
-			"auth_injection": json.RawMessage(authInjection), "access": string(mcp.Access),
-		})
-		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
-			AgentID: pgAgentID, Type: "mcp_server", Slug: mcp.Slug,
-			Description: mcp.Name, SetupInstructions: "", ExpectedUrl: mcp.URL,
-			ExpectedScopes: scopes, Spec: mcpSpec,
-		}); err != nil {
-			h.logger.Error("record mcp need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-			return
-		}
-		mcpSlugs[i] = mcp.Slug
-	}
-	// Drop needs for slugs the agent no longer declares. The backing MCP server
-	// resource is owner-owned and shared, so it is not deleted here — it outlives
-	// this agent's declaration and may back another agent's binding.
-	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
-		AgentID: pgAgentID, Type: "mcp_server", Slugs: mcpSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale mcp needs failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync MCP servers")
-		return
-	}
-
-	connectorSlugs := make([]string, len(req.Connectors))
-	for i, connector := range req.Connectors {
-		if connector.Slug == "" || connector.Description == "" {
-			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
-			return
-		}
-		requirement, err := json.Marshal(connector.Requirement)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
-			return
-		}
-		need, err := connectorssvc.ParseNeedSpec(requirement)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		need.Multiple = connector.Multiple
-		spec, err := json.Marshal(need)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid connector declaration")
-			return
-		}
-		if err := needsQ.UpsertResourceNeed(ctx, dbq.UpsertResourceNeedParams{
-			AgentID: pgAgentID, Type: "connector", Slug: connector.Slug, Description: connector.Description,
-			SetupInstructions: "", ExpectedUrl: "", ExpectedScopes: "", Spec: spec,
-		}); err != nil {
-			h.logger.Error("record connector need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync connectors")
-			return
-		}
-		connectorSlugs[i] = connector.Slug
-	}
-	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
-		AgentID: pgAgentID, Type: "connector", Slugs: connectorSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale connector needs failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync connectors")
-		return
-	}
-
-	// Connections are declarations only. A sync can make one binding unready by
-	// expanding its need scopes, but cannot mutate the shared resource.
-	connSlugs := make([]string, len(req.Connections))
-	for i, c := range req.Connections {
-		authInjection, err := json.Marshal(c.AuthInjection)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid auth_injection for connection "+c.Slug)
-			return
-		}
-		authParams := []byte("{}")
-		if len(c.AuthParams) > 0 {
-			if authParams, err = json.Marshal(c.AuthParams); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "invalid auth_params for connection "+c.Slug)
-				return
-			}
-		}
-		headers := []byte("{}")
-		if len(c.Headers) > 0 {
-			if headers, err = json.Marshal(c.Headers); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "invalid headers for connection "+c.Slug)
-				return
-			}
-		}
-		scopes := oauth.CanonicalScopeSet(c.Scopes)
-		if err := h.recordConnectionNeed(ctx, needsQ, agentID, c.Slug, c, scopes, authInjection, authParams, headers); err != nil {
-			h.logger.Error("record connection need failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
-			return
-		}
-		connSlugs[i] = c.Slug
-	}
-	if err := needsQ.DeleteResourceNeedsByAgentTypeExcept(ctx, dbq.DeleteResourceNeedsByAgentTypeExceptParams{
-		AgentID: pgAgentID, Type: "connection", Slugs: connSlugs,
-	}); err != nil {
-		h.logger.Error("delete stale connection needs failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync connections")
-		return
-	}
-
-	if err := needsTx.Commit(ctx); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "failed to commit resource sync")
-		return
-	}
-
-	// Upsert directories, then delete stale.
-	dirPaths := make([]string, len(req.Directories))
-	for i, d := range req.Directories {
-		canonical, pathErr := storage.CleanAgentPath(d.Path)
-		if pathErr != nil || canonical != d.Path ||
-			!validDirectoryAccess(d.Read) || !validDirectoryAccess(d.Write) || !validDirectoryAccess(d.List) ||
-			!validDirectoryScope(d.Scope) || d.RetentionHours < 0 {
-			writeJSONError(w, http.StatusBadRequest, "invalid directory declaration: "+d.Path)
-			return
-		}
-		if err := q.UpsertDirectory(ctx, dbq.UpsertDirectoryParams{
-			AgentID:        pgAgentID,
-			Path:           d.Path,
-			ReadAccess:     string(d.Read),
-			WriteAccess:    string(d.Write),
-			ListAccess:     string(d.List),
-			Description:    d.Description,
-			LlmHint:        d.LLMHint,
-			RetentionHours: int32(d.RetentionHours),
-			Scope:          string(d.Scope),
-		}); err != nil {
-			h.logger.Error("upsert directory failed", zap.Error(err))
-			writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")
-			return
-		}
-		dirPaths[i] = d.Path
-	}
-	if err := q.DeleteDirectoriesByAgentExcept(ctx, dbq.DeleteDirectoriesByAgentExceptParams{
-		AgentID: pgAgentID,
-		Paths:   dirPaths,
-	}); err != nil {
-		h.logger.Error("delete stale directories failed", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to sync directories")
-		return
-	}
-
-	// Discover MCP status for servers with credentials. discoverAllMCPStatus
-	// updates the tool_schemas JSONB column on success, so re-fetch the rows
-	// afterwards to read the freshly-cached schemas into the prompt + response.
-	mcpServers, _ := q.ListBoundMCPServersByAgent(ctx, pgAgentID)
-	mcpStatuses := h.discoverAllMCPStatus(ctx, q, agentID, mcpServers)
-	mcpServers, _ = q.ListBoundMCPServersByAgent(ctx, pgAgentID)
-
-	// Index the (possibly-refreshed) server rows by the agent's need slug so we
-	// can decode tool_schemas once and reuse for both the prompt template and the
-	// SyncResponse payload.
-	serverBySlug := make(map[string]dbq.ListBoundMCPServersByAgentRow, len(mcpServers))
-	for _, srv := range mcpServers {
-		serverBySlug[srv.Slug] = srv
-	}
-
-	// Decode discovered MCP tool schemas + per-server auth status for the
-	// SyncResponse. Prompt rendering moved into agentsdk so we no longer
-	// build a parallel promptpkg.MCPServerStatus list here — the agent
-	// composes its own MCP status lines from MCPAuthStatus + MCPSchemas.
-	_ = serverBySlug // retained for readability of the loop below
-	var mcpAuthStatus []wire.MCPAuthStatus
-	mcpSchemas := make(map[string][]wire.MCPToolSchema)
-	for _, s := range mcpStatuses {
-		mcpAuthStatus = append(mcpAuthStatus, s.MCPAuthStatus)
-		if srv, ok := serverBySlug[s.Slug]; ok && len(srv.ToolSchemas) > 0 {
-			var stored []mcpToolInfo
-			if err := json.Unmarshal(srv.ToolSchemas, &stored); err == nil {
-				schemas := make([]wire.MCPToolSchema, len(stored))
-				for i, t := range stored {
-					schemas[i] = wire.MCPToolSchema{
-						ServerSlug:  s.Slug,
-						Name:        t.Name,
-						Description: t.Description,
-						InputSchema: t.InputSchema,
-					}
-				}
-				if len(schemas) > 0 {
-					mcpSchemas[s.Slug] = schemas
-				}
-			} else {
-				h.logger.Warn("decode tool_schemas failed", zap.String("slug", s.Slug), zap.Error(err))
-			}
-		}
-	}
-
-	// Build agent route URL. h.agentDomain is required at startup
-	// (config.resolveAgentDomain panics if neither AGENT_DOMAIN nor
-	// PUBLIC_URL is set), and SubdomainProxy panics on empty too — so
-	// it's always populated by the time this handler runs.
-	agentRecord, err := q.GetAgentByID(ctx, pgAgentID)
-	if err != nil {
-		h.logger.Error("load agent for prompt data", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to load agent")
-		return
-	}
-	routeURL := h.agentBaseURL(agentRecord.Slug)
-
-	// Sibling address book: pre-rendered Tools list per sibling so the
-	// agent can install agent_<slug> bindings + render the prompt
-	// without per-turn lookups. Visibility-by-user is layered on at
-	// dispatch (PromptInput.VisibleSiblings); the SiblingInfo list
-	// itself is unfiltered.
-	siblings, err := h.buildSiblingInfos(ctx, q, pgAgentID)
-	if err != nil {
-		h.logger.Error("load sibling info", zap.Error(err))
-		writeJSONError(w, http.StatusInternalServerError, "failed to load siblings")
-		return
-	}
-	// Public storage base — the prefix StorageHandle.URL joins with '/'
-	// and the storage path (e.g. "reports/q1.csv") to form a URL.
-	publicStorageBase := routeURL + "/__air/storage"
-
-	// Notify subscribed clients (agent detail tabs) that the agent's
-	// declared surface — tools, webhooks, crons, routes, MCP servers,
-	// connections, model slots — was just refreshed. Tabs subscribed to
-	// "agent.synced" can refetch instead of waiting for the user to hit
-	// reload after a build/upgrade completes.
-	if h.pubsub != nil {
-		uuidAgentID := uuid.UUID(pgAgentID.Bytes)
-		_ = h.pubsub.Publish(ctx, uuidAgentID, realtime.NewEnvelope("agent.synced", uuidAgentID.String(), &airlockv1.AgentSyncedEvent{
-			AgentId: uuidAgentID.String(),
-		}))
-	}
-
-	// Resolve the agent's effective model slots (agent override →
-	// system default) so the prompt template can branch on which
-	// builtins are actually available at runtime.
-	caps, modalities, err := h.resolveAgentCapabilities(ctx, q, agentRecord)
-	if err != nil {
-		h.logger.Warn("resolve agent capabilities", zap.Error(err))
-		// Non-fatal — fall through with zero-value caps (everything
-		// false). The template will emit a minimal prompt.
-	}
-
-	writeJSON(w, http.StatusOK, wire.SyncResponse{
-		PromptData: wire.PromptData{
-			AgentDashboardURL:   h.publicURL + "/agents/" + agentID.String(),
-			AgentRouteURL:       routeURL,
-			Siblings:            siblings,
-			Capabilities:        caps,
-			SupportedModalities: modalities,
-		},
-		// Fingerprint the config this PromptData reflects; airlock stamps the
-		// same value onto each dispatch so the agent can detect drift and
-		// self-heal (see trigger.AgentConfigHash).
-		SyncStateHash:     trigger.AgentConfigHash(agentRecord),
-		MCPAuthStatus:     mcpAuthStatus,
-		MCPSchemas:        mcpSchemas,
-		PublicStorageBase: publicStorageBase,
-	})
-}
-
-func validDirectoryAccess(access wire.Access) bool {
-	return access == wire.Access(agentsdk.AccessPublic) || access == wire.Access(agentsdk.AccessUser) || access == wire.Access(agentsdk.AccessAdmin)
-}
-
-func validDirectoryScope(scope wire.DirectoryScope) bool {
-	return scope == "" || scope == "user" || scope == "conv" || scope == "run"
-}
-
-// resolveAgentCapabilities walks the agent's six optional model
-// slots (vision/stt/tts/image_gen/embedding/search) plus the
-// system-settings defaults and emits a Capabilities matrix + the
-// chat model's input modality list. Each slot is "bound" iff
-// (agent has provider+model) OR (system default has provider+model).
-//
-// Errors from GetSystemSettings are returned for logging; the
-// returned Capabilities is still meaningful (slots that ONLY rely
-// on agent overrides will resolve correctly).
-func (h *Handler) resolveAgentCapabilities(ctx context.Context, q *dbq.Queries, ag dbq.Agent) (wire.Capabilities, []string, error) {
-	settings, sErr := q.GetSystemSettings(ctx)
-	hasDefault := sErr == nil
-
-	bound := func(agentPID pgtype.UUID, agentModel string, defaultPID pgtype.UUID, defaultModel string) bool {
-		if agentPID.Valid && agentModel != "" {
-			return true
-		}
-		if hasDefault && defaultPID.Valid && defaultModel != "" {
-			return true
-		}
-		return false
-	}
-
-	caps := wire.Capabilities{
-		Vision:        bound(ag.VisionProviderID, ag.VisionModel, settings.DefaultVisionProviderID, settings.DefaultVisionModel),
-		Transcription: bound(ag.SttProviderID, ag.SttModel, settings.DefaultSttProviderID, settings.DefaultSttModel),
-		Speech:        bound(ag.TtsProviderID, ag.TtsModel, settings.DefaultTtsProviderID, settings.DefaultTtsModel),
-		Embedding:     bound(ag.EmbeddingProviderID, ag.EmbeddingModel, settings.DefaultEmbeddingProviderID, settings.DefaultEmbeddingModel),
-		Image:         bound(ag.ImageGenProviderID, ag.ImageGenModel, settings.DefaultImageGenProviderID, settings.DefaultImageGenModel),
-		Search:        bound(ag.SearchProviderID, ag.SearchModel, settings.DefaultSearchProviderID, settings.DefaultSearchModel),
-	}
-
-	// Chat-model modalities: same agent → default fallback for the
-	// exec slot, then look up the model in the active catalog.
-	execModel := ag.ExecModel
-	var execProvider pgtype.UUID = ag.ExecProviderID
-	if execModel == "" || !execProvider.Valid {
-		if hasDefault {
-			execModel = settings.DefaultExecModel
-			execProvider = settings.DefaultExecProviderID
-		}
-	}
-	var modalities []string
-	if execModel != "" && execProvider.Valid {
-		if prov, err := q.GetProviderByID(ctx, execProvider); err == nil {
-			if m := solprovider.GetModalities(prov.CatalogID, execModel); m != nil {
-				modalities = m.Input
-			}
-		}
-	}
-
-	if sErr != nil {
-		return caps, modalities, sErr
-	}
-	return caps, modalities, nil
-}
-
-// buildSiblingInfos hydrates the parent agent's sibling address book
-// into the wire shape: id + slug + name + description + tool
-// schemas. Tool schemas come from the sibling's agent_tools rows
-// (synced from the sibling agentsdk's own RegisterTool calls). The
-// built-in `prompt` meta-tool is added by the agent-side renderer
-// (it's the same shape for every sibling, no per-row data).
-func (h *Handler) buildSiblingInfos(ctx context.Context, q *dbq.Queries, parentAgentID pgtype.UUID) ([]wire.SiblingInfo, error) {
-	rows, err := q.ListSiblings(ctx, parentAgentID)
-	if err != nil {
-		return nil, fmt.Errorf("list siblings: %w", err)
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	out := make([]wire.SiblingInfo, 0, len(rows))
-	for _, r := range rows {
-		toolRows, err := q.ListAgentTools(ctx, r.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list tools for sibling %s: %w", r.Slug, err)
-		}
-		tools := make([]wire.MCPToolSchema, len(toolRows))
-		for i, t := range toolRows {
-			tools[i] = wire.MCPToolSchema{
-				ServerSlug:  r.Slug,
-				Name:        t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
-			}
-		}
-		out = append(out, wire.SiblingInfo{
-			ID:          uuid.UUID(r.ID.Bytes),
-			Slug:        r.Slug,
-			Name:        r.Name,
-			Description: r.Description,
-			Tools:       tools,
-		})
-	}
-	return out, nil
-}
-
-// cleanAgentEmoji bounds and sanitizes a synced agent emoji. It is
-// deliberately NOT "one rune" — valid emoji are routinely multi-codepoint
-// (ZWJ sequences like 👨‍💻, skin-tone modifiers, two-regional-indicator
-// flags). It only trims, caps the byte length, and rejects control
-// characters / newlines. Returns ok=false for empty or rejected input so
-// the caller skips the update rather than failing the sync over cosmetics.
-func cleanAgentEmoji(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" || len(s) > 16 {
-		return "", false
-	}
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return "", false
-		}
-	}
-	return s, true
 }

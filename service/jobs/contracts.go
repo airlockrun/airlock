@@ -84,11 +84,26 @@ func HandlerKey(name string, version int32) string {
 	return fmt.Sprintf("%s@v%d", name, version)
 }
 
-func ImmutableContractMatches(left, right wire.JobHandlerDef) bool {
-	return left.InputSchemaHash == right.InputSchemaHash &&
-		left.OutputSchemaHash == right.OutputSchemaHash &&
-		left.TimeoutMs == right.TimeoutMs &&
-		left.MaxAttempts == right.MaxAttempts
+// CheckImmutableContract compares declarations for the same handler identity.
+// Diagnostics include only execution limits and hashes, not schema contents.
+func CheckImmutableContract(stored, candidate wire.JobHandlerDef) error {
+	var changes []string
+	if stored.InputSchemaHash != candidate.InputSchemaHash {
+		changes = append(changes, fmt.Sprintf("inputSchemaHash: %s -> %s", stored.InputSchemaHash, candidate.InputSchemaHash))
+	}
+	if stored.OutputSchemaHash != candidate.OutputSchemaHash {
+		changes = append(changes, fmt.Sprintf("outputSchemaHash: %s -> %s", stored.OutputSchemaHash, candidate.OutputSchemaHash))
+	}
+	if stored.TimeoutMs != candidate.TimeoutMs {
+		changes = append(changes, fmt.Sprintf("timeoutMs: %d -> %d", stored.TimeoutMs, candidate.TimeoutMs))
+	}
+	if stored.MaxAttempts != candidate.MaxAttempts {
+		changes = append(changes, fmt.Sprintf("maxAttempts: %d -> %d", stored.MaxAttempts, candidate.MaxAttempts))
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s changed its immutable contract (stored -> candidate: %s); restore the stored contract or explicitly register a new job version; retain the original version while queued or running jobs require it", ErrContractConflict, HandlerKey(candidate.Name, candidate.Version), strings.Join(changes, "; "))
 }
 
 func HashHandlerSchema(value json.RawMessage) string {

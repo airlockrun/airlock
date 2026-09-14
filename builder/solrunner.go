@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/airlockrun/airlock/container"
@@ -74,6 +75,20 @@ type solRunResult struct {
 	Nudges      int
 }
 
+func codegenToolEnv(apiURL string, opts solRunOpts) []string {
+	env := []string{
+		"AIRLOCK_API_URL=" + apiURL,
+		"AIRLOCK_AGENT_ID=" + uuid.UUID(opts.AgentID.Bytes).String(),
+		"AIRLOCK_INTEGRATION_TOKEN=" + opts.IntegrationToken,
+		"AIRLOCK_TEST_EXECUTOR_URL=" + strings.TrimRight(apiURL, "/") + "/api/codegen/integrations/test-executor",
+		"AIRLOCK_TEST_EXECUTOR_TOKEN=" + opts.IntegrationToken,
+	}
+	if opts.TestDBURL != "" {
+		env = append(env, "TEST_DB_URL="+opts.TestDBURL, "TEST_DB_PSQL="+opts.TestDBPSQL, "TEST_DB_SCHEMA="+opts.TestDBSchema)
+	}
+	return env
+}
+
 // runSolInProcess starts a toolserver container, runs the Sol Runner in-process,
 // and returns the result. The toolserver provides filesystem tools (read, write,
 // bash, etc.) while the LLM loop runs in the Airlock process.
@@ -129,19 +144,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	}
 
 	// Step 2: Start toolserver container.
-	var toolEnv []string
-	if opts.TestDBURL != "" {
-		toolEnv = append(toolEnv,
-			"TEST_DB_URL="+opts.TestDBURL,
-			"TEST_DB_PSQL="+opts.TestDBPSQL,
-			"TEST_DB_SCHEMA="+opts.TestDBSchema,
-		)
-	}
-	toolEnv = append(toolEnv,
-		"AIRLOCK_API_URL="+b.cfg.APIURLAgent,
-		"AIRLOCK_AGENT_ID="+uuid.UUID(opts.AgentID.Bytes).String(),
-		"AIRLOCK_INTEGRATION_TOKEN="+opts.IntegrationToken,
-	)
+	toolEnv := codegenToolEnv(b.cfg.APIURLAgent, opts)
 	// Workspace mount: in compose/docker-in-docker mode, mount only this
 	// build's subdirectory from the shared codegen volume. The toolserver
 	// must not see activation data, cached libraries, or other workspaces in
@@ -266,19 +269,15 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 
 	remoteExec := executor.NewRemoteExecutor(transport, remoteTools)
 
-	// Step 5: Register the agent-builder's exit tool (sol's exit plus a
-	// "refused" status) as a LOCAL tool. Sol's NewRunner can auto-inject
-	// its own exit tool, but execution still flows through the
-	// caller-provided executor — and our compositeExecutor routes
-	// anything not in `local.Tools()` to the remote toolserver, which
-	// does not implement `exit`. Adding it here ensures the composite
-	// keeps `exit` local; sol's auto-injection then sees `exit` already
-	// in the tool set and skips its own copy.
+	// Step 5: Register Runner-owned tools locally. Exit updates in-process
+	// completion state, while task needs the active Runner to create a child;
+	// neither belongs in the remote filesystem toolserver.
 	exitState := &soltools.ExitState{}
 	if opts.LocalTools == nil {
 		opts.LocalTools = tool.Set{}
 	}
 	opts.LocalTools["exit"] = newExitTool(exitState)
+	opts.LocalTools["task"] = soltools.Task()
 
 	// Step 6: Build tool.Set and executor, merging local tools if present.
 	toolSet := remoteToolsToSet(remoteTools)
@@ -312,12 +311,15 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	// already wired into the executor above, so sol's auto-injection
 	// path will no-op (it sees the tool in the set and skips).
 	runner := sol.NewRunner(sol.RunnerOptions{
-		Agent:     ag,
-		Model:     model,
-		Bus:       runBus,
-		Executor:  exec,
-		Quiet:     true,
-		ExitState: exitState,
+		Agent:                       ag,
+		Model:                       model,
+		Bus:                         runBus,
+		Executor:                    exec,
+		WorkDir:                     opts.AgentDir,
+		Quiet:                       true,
+		ExitState:                   exitState,
+		ToolCallExecutionMode:       stream.ToolCallExecutionAsync,
+		MaxStreamErrorContinuations: 2,
 	})
 	runner.PermissionManager().SetRules([]bus.PermissionRule{
 		{Permission: "*", Pattern: "*", Action: "allow"},
@@ -587,10 +589,9 @@ func remoteToolsToSet(infos []tool.Info) tool.Set {
 // stark contrast to dumping the model-facing output. LLM text deltas are
 // buffered and emitted as a single `[output] ...` line just before the next
 // tool call / step boundary. The exit tool is skipped here — codegen.go emits
-// the richer `[exit] <status>: <message>` line from the run result. The bus
-// dispatches synchronously on the runner's goroutine, so a closure-local
-// buffer is safe without a mutex.
+// the richer `[exit] <status>: <message>` line from the run result.
 func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
+	var mu sync.Mutex
 	var textBuf strings.Builder
 
 	flushText := func() {
@@ -602,6 +603,8 @@ func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
 	}
 
 	b.Subscribe(bus.StreamTextDelta, func(e bus.Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		td, ok := e.Properties.(stream.TextDeltaEvent)
 		if !ok {
 			return
@@ -611,9 +614,13 @@ func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
 	// A tool call only flushes any buffered LLM text; the result event below
 	// carries the one compact line per tool.
 	b.Subscribe(bus.StreamToolCall, func(e bus.Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		flushText()
 	})
 	b.Subscribe(bus.StreamToolResult, func(e bus.Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		flushText()
 		tr, ok := e.Properties.(stream.ToolResultEvent)
 		if !ok {
@@ -641,6 +648,8 @@ func subscribeForLogs(b *bus.Bus, cb func(string), sink buildSink) {
 		}
 	})
 	b.Subscribe(bus.StreamStepComplete, func(e bus.Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		flushText()
 		step, ok := e.Properties.(*sol.StepResult)
 		if !ok {

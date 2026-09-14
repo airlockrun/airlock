@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/airlockrun/airlock/agentapi"
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/auth/passkey"
-	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/builder"
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
@@ -18,10 +18,13 @@ import (
 	"github.com/airlockrun/airlock/oauth"
 	"github.com/airlockrun/airlock/realtime"
 	"github.com/airlockrun/airlock/secrets"
+	"github.com/airlockrun/airlock/service/agentruns"
 	agentssvc "github.com/airlockrun/airlock/service/agents"
 	agentstoragesvc "github.com/airlockrun/airlock/service/agentstorage"
 	bridgessvc "github.com/airlockrun/airlock/service/bridges"
+	"github.com/airlockrun/airlock/service/capabilities"
 	catalogsvc "github.com/airlockrun/airlock/service/catalog"
+	chatsvc "github.com/airlockrun/airlock/service/chat"
 	connsvc "github.com/airlockrun/airlock/service/connections"
 	connectorartifactssvc "github.com/airlockrun/airlock/service/connectorartifacts"
 	connectordirectoriessvc "github.com/airlockrun/airlock/service/connectordirectories"
@@ -43,8 +46,8 @@ import (
 	providerssvc "github.com/airlockrun/airlock/service/providers"
 	resourcessvc "github.com/airlockrun/airlock/service/resources"
 	runssvc "github.com/airlockrun/airlock/service/runs"
+	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	settingssvc "github.com/airlockrun/airlock/service/settings"
-	siblingssvc "github.com/airlockrun/airlock/service/siblings"
 	usagesvc "github.com/airlockrun/airlock/service/usage"
 	userssvc "github.com/airlockrun/airlock/service/users"
 	"github.com/airlockrun/airlock/storage"
@@ -58,6 +61,7 @@ import (
 )
 
 type RouterConfig struct {
+	AgentRuns agentruns.Config
 	DB        *db.DB
 	JWTSecret string
 
@@ -78,7 +82,8 @@ type RouterConfig struct {
 	BuildService *builder.BuildService
 
 	// Public URL (for OAuth callbacks, auth URLs)
-	PublicURL string
+	PublicURL      string
+	AgentBaseImage string
 
 	// OAuth client
 	OAuthClient *oauth.Client
@@ -130,7 +135,41 @@ type RouterConfig struct {
 	Logger *zap.Logger
 }
 
-func NewRouter(cfg RouterConfig) http.Handler {
+// Router owns hosted chat and its background event publishers. HTTP server
+// shutdown alone does not drain these workers; call Shutdown before closing DB,
+// PubSub, containers or logger. Other producers (bridges/builders) must also stop.
+type Router struct {
+	http.Handler
+	chat          *chatsvc.Service
+	conversations *conversationsHandler
+	stopAgentRuns context.CancelFunc
+	agentRunsDone chan struct{}
+}
+
+// Shutdown stops chat admission, interrupts hosted runtimes without revoking
+// credentials or cancelling durable jobs, and waits for settlement and publishers.
+// On a deadline error, keep dependencies alive or exit for DB-lease recovery.
+func (r *Router) Shutdown(ctx context.Context) error {
+	r.stopAgentRuns()
+	drained := r.conversations.stopForwarding()
+	err := r.chat.Shutdown(ctx)
+	select {
+	case <-r.agentRunsDone:
+	case <-ctx.Done():
+		return errors.Join(err, ctx.Err())
+	}
+	select {
+	case <-drained:
+		return err
+	case <-ctx.Done():
+		return errors.Join(err, ctx.Err())
+	}
+}
+
+func NewRouter(cfg RouterConfig) *Router {
+	if cfg.AgentBaseImage == "" {
+		panic("api: RouterConfig.AgentBaseImage is required")
+	}
 	if cfg.HTTPNetwork == nil {
 		panic("api: HTTP network policy is required")
 	}
@@ -154,6 +193,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	r := chi.NewRouter()
+	owned := &Router{}
 
 	// Cross-cutting middleware (RequestID, RealIP, requestLogger, recoverers)
 	// is applied on the outer wrapper below, so it covers both the chi-routed
@@ -233,7 +273,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// takes function-typed deps for MCP discovery + auth injection so it
 	// doesn't have to depend on the goai/mcp client directly.
 	credSvcDiscovery := func(ctx context.Context, serverURL string, authInjection []byte, creds string) ([]connsvc.ToolInfo, string, error) {
-		tools, instructions, err := agentapi.DiscoverMCPTools(ctx, cfg.HTTPNetwork.Client(60*time.Second), serverURL, authInjection, creds)
+		tools, instructions, err := runtimesvc.DiscoverMCPTools(ctx, cfg.HTTPNetwork.Client(60*time.Second), serverURL, authInjection, creds)
 		if err != nil {
 			return nil, "", err
 		}
@@ -253,9 +293,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		credSvcDiscovery,
 		func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
 			return agentapi.DiscoverMCPAuth(ctx, cfg.HTTPNetwork.Client(30*time.Second), serverURL)
-		},
-		agentapi.InjectAuth,
-		cfg.HTTPNetwork.Client(30*time.Second),
+		}, runtimesvc.
+			InjectAuth, cfg.HTTPNetwork.Client(30*time.Second),
 		cfg.HTTPNetwork,
 	))
 	brH := newBridgeHandler(bridgessvc.New(
@@ -277,7 +316,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Public endpoints (no JWT required)
 	r.Get("/api/v1/credentials/oauth/callback", credH.OAuthCallback)
 	r.Get("/auth-external", idH.AuthExternal)
-	r.Get("/.well-known/airlock-agent-sdk", getAgentSDKInfo(cfg.PublicURL))
+	r.Get("/.well-known/airlock-agent-sdk", getAgentSDKInfo(cfg.PublicURL, cfg.AgentBaseImage))
 	r.Route("/api/hosts/v1", func(r chi.Router) {
 		r.Post("/enroll/device-code", hostProtocol.Begin)
 		r.Post("/enroll/complete", hostProtocol.CompleteEnrollment)
@@ -345,7 +384,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// User management (admin only)
 		r.Route("/users", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantUserManage)))
 			r.Get("/", usersHandler.List)
 			r.Post("/", usersHandler.Create)
 			r.Patch("/{userID}", usersHandler.UpdateRole)
@@ -355,8 +393,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// System settings. GET is readable by any authenticated user so the
 		// Agent Create flow can prefill system defaults; PUT stays admin-only.
 		r.Get("/settings", sysSettingsHandler.Get)
-		r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantSettingsUpdate))).Put("/settings", sysSettingsHandler.Update)
-		r.Get("/agent-sdk", getAgentSDKInfo(cfg.PublicURL))
+		r.Put("/settings", sysSettingsHandler.Update)
+		r.Get("/agent-sdk", getAgentSDKInfo(cfg.PublicURL, cfg.AgentBaseImage))
 		r.Post("/device-login/inspect", deviceLoginH.Inspect)
 		r.Post("/device-login/approve", deviceLoginH.Approve)
 		r.Post("/device-login/deny", deviceLoginH.Deny)
@@ -388,9 +426,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Route("/providers", func(r chi.Router) {
 			// List is manager+ (model selection needs the non-secret provider
 			// list); mutations stay admin. The service re-gates either way.
-			r.With(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderView))).Get("/", providersHandler.List)
+			r.Get("/", providersHandler.List)
 			r.Group(func(r chi.Router) {
-				r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantProviderManage)))
 				r.Post("/", providersHandler.Create)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Patch("/", providersHandler.Update)
@@ -430,7 +467,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		// Model entitlements (admin only).
 		r.Route("/model-grants", func(r chi.Router) {
-			r.Use(auth.RequireTenantRole(authz.RequiredTenantRole(authz.TenantModelGrantManage)))
 			r.Get("/", grantsHandler.ListModelGrants)
 			r.Get("/usage", grantsHandler.ModelUsage)
 			r.Post("/", grantsHandler.GrantModel)
@@ -461,7 +497,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			cfg.AgentBaseURL,
 		)
 		publishRunTerminal := func(ctx context.Context, agentID, runID uuid.UUID, status, errMsg string) {
-			agentapi.PublishRunTerminal(ctx, cfg.PubSub, agentID, runID, status, errMsg)
+			runtimesvc.
+				PublishRunTerminal(ctx, dbq.New(cfg.DB.Pool()), cfg.PubSub, agentID, runID, status, errMsg)
 		}
 		runsService := runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Jobs, publishRunTerminal, cfg.Logger.Named("runs"))
 		rH := newRunsHandler(runsService, cfg.S3Client, cfg.Logger.Named("runs"))
@@ -469,9 +506,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		cH := &conversationsHandler{
 			svc: convsvc.New(cfg.DB, cfg.S3Client, cfg.Logger.Named("conversations"),
 				func(parts []byte, agentID string) []string {
-					return agentapi.ExtractCanonicalKeys(parts, agentID)
+					return runtimesvc.ExtractCanonicalKeys(parts, agentID)
 				}),
-			runsSvc:      runsService,
 			db:           cfg.DB,
 			dispatcher:   cfg.Dispatcher,
 			promptProxy:  cfg.PromptProxy,
@@ -482,9 +518,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			agentBaseURL: cfg.AgentBaseURL,
 			logger:       cfg.Logger.Named("conversations"),
 		}
+		owned.conversations = cH
 		mH := newModelsHandler(modelssvc.New(cfg.DB, catalogsvc.New(cfg.DB, cfg.Logger.Named("models-catalog")), cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("models")))
 		r.Get("/models/allowed", mH.AllowedModels)
-		siblingsH := newSiblingsHandler(siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("siblings")))
 
 		// Wire post-upgrade notifications to conversations handler.
 		cfg.BuildService.SetUpgradeNotifier(cH)
@@ -534,14 +570,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				credSvcDiscovery,
 				func(ctx context.Context, serverURL string) (*oauth.DiscoveryResult, error) {
 					return agentapi.DiscoverMCPAuth(ctx, cfg.HTTPNetwork.Client(30*time.Second), serverURL)
-				},
-				agentapi.InjectAuth, cfg.HTTPNetwork.Client(30*time.Second), cfg.HTTPNetwork,
+				}, runtimesvc.
+					InjectAuth, cfg.HTTPNetwork.Client(30*time.Second), cfg.HTTPNetwork,
 			),
 			GitCreds:    gitcredssvc.New(cfg.DB, cfg.Secrets, cfg.Logger.Named("sysagent-gitcreds")),
 			ManagedBots: managedBotsSvc,
 			Members:     memberssvc.New(cfg.DB, cfg.Logger.Named("sysagent-members")),
 			Runs:        runssvc.New(cfg.DB, cfg.Dispatcher, cfg.Jobs, publishRunTerminal, cfg.Logger.Named("sysagent-runs")),
-			Siblings:    siblingssvc.New(cfg.DB, cfg.Dispatcher, cfg.Logger.Named("sysagent-siblings")),
 			Users:       userssvc.New(cfg.DB, cfg.BridgeManager, cfg.Logger.Named("sysagent-users")),
 		})
 		// Route post-upgrade notifications triggered from sysagent
@@ -625,18 +660,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				r.Get("/members", agH.ListMembers)
 				r.Post("/members", agH.AddMember)
 				r.Delete("/members/{userID}", agH.RemoveMember)
-
-				// A2A: sibling address book + MCP access toggles. All
-				// admin-gated (siblingsH.requireParentAdmin); user JWT is
-				// already in ctx via the /api/v1 group middleware.
-				r.Get("/siblings", siblingsH.List)
-				r.Get("/siblings/addable", siblingsH.ListAddable)
-				r.Get("/siblings/inbound", siblingsH.ListInbound)
-				r.Post("/siblings", siblingsH.Add)
-				r.Patch("/siblings/{siblingID}", siblingsH.UpdateMaxAccess)
-				r.Delete("/siblings/{siblingID}", siblingsH.Remove)
-				r.Get("/a2a-settings", siblingsH.GetA2ASettings)
-				r.Put("/a2a-settings", siblingsH.UpdateA2ASettings)
+				r.Get("/access-settings", agentAccessHandler(agH.svc, false))
+				r.Put("/access-settings", agentAccessHandler(agH.svc, true))
 
 				// Credentials & Connections
 				r.Get("/connections", credH.ListConnections)
@@ -747,7 +772,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// (channel event endpoint removed — bridges use long-polling, not push)
 
 	// Agent API routes (authenticated via agent JWT)
+	runtimeService := runtimesvc.New(runtimesvc.Config{
+		PublicURL: cfg.PublicURL, AgentBaseURL: cfg.AgentBaseURL,
+		DB: cfg.DB, Encryptor: cfg.Secrets, OAuthClient: cfg.OAuthClient, S3: cfg.S3Client, Files: fileService,
+		Builder: cfg.BuildService, PubSub: cfg.PubSub, BridgeMgr: cfg.BridgeManager, HTTPNetwork: cfg.HTTPNetwork,
+		Logger: cfg.Logger.Named("runtime"), LLMProxyURL: cfg.LLMProxyURL, ForceInlineAttachments: cfg.ForceInlineAttachments,
+	})
+	broker := capabilities.New(cfg.DB, cfg.Dispatcher, runtimeService)
+	agentRuns := agentruns.New(cfg.DB, broker, runtimeService, cfg.Dispatcher, cfg.Logger.Named("agent-runs"), cfg.AgentRuns)
+	agentCtx, stopAgentRuns := context.WithCancel(context.Background())
+	owned.stopAgentRuns, owned.agentRunsDone = stopAgentRuns, make(chan struct{})
 	ah := agentapi.New(agentapi.Config{
+		AgentRuns:              agentRuns,
+		Runtime:                runtimeService,
 		DB:                     cfg.DB,
 		Encryptor:              cfg.Secrets,
 		OAuthClient:            cfg.OAuthClient,
@@ -763,14 +800,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		Scheduler:              cfg.Scheduler,
 		PublicURL:              cfg.PublicURL,
 		AgentBaseURL:           cfg.AgentBaseURL,
-		LLMProxyURL:            cfg.LLMProxyURL,
-		ForceInlineAttachments: cfg.ForceInlineAttachments,
 		HTTPNetwork:            cfg.HTTPNetwork,
 		JWTSecret:              cfg.JWTSecret,
-		Dispatcher:             cfg.Dispatcher,
 		Logger:                 cfg.Logger.Named("agent-api"),
 	})
-	integrationsH := newIntegrationsHandler(integrationssvc.New(cfg.DB, ah))
+	integrationsH := newIntegrationsHandler(integrationssvc.New(cfg.DB, runtimeService))
+	owned.chat = chatsvc.New(cfg.DB, broker, runtimeService, cfg.Dispatcher, cfg.Logger.Named("chat"))
+	cfg.Dispatcher.SetPromptRuntime(owned.chat)
 	r.Route("/api/v1/agents/{agentID}/integrations", func(r chi.Router) {
 		r.Use(auth.Middleware(cfg.JWTSecret))
 		r.Use(auth.LiveSessionMiddleware(cfg.DB))
@@ -782,14 +818,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Route("/api/codegen/integrations", func(r chi.Router) {
 		r.Use(codegenIntegrationAuth(cfg.DB))
 		mountIntegrationRoutes(r, integrationsH)
+		r.Post("/test-executor", testExecutorHandler(integrationssvc.NewTestExecutors(cfg.DB, cfg.Containers.(container.TestJSExecutorManager))))
 	})
-	// MCP server endpoint — A2A entry point + external MCP client
-	// entry point. Mounted at top level (outside the /api/agent
-	// agent-JWT route group) because its auth model is multi-principal
-	// (user JWT / agent JWT / OAuth-issued access token). The
+	// External MCP accepts user JWTs and OAuth access tokens outside the
+	// agent-JWT route group. The
 	// /public-mcp route serves the same JSON-RPC interface anonymously,
 	// gated by `agent.allow_public_mcp`.
-	mcp := agentapi.NewMCPServer(cfg.Dispatcher, cfg.PubSub, cfg.Logger.Named("mcp"))
+	mcp := agentapi.NewMCPServer(cfg.Dispatcher, cfg.Logger.Named("mcp"))
 	r.Post("/api/agent/{identifier}/mcp", func(w http.ResponseWriter, req *http.Request) {
 		mcp.ServeHTTP(w, req, ah)
 	})
@@ -811,6 +846,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret, dbq.New(cfg.DB.Pool())))
+		r.Post("/agents/{definition}/runs", ah.StartAgent)
+		r.Get("/agents/{definition}/runs", ah.ListAgentRuns)
+		r.Get("/agents/{definition}/runs/{id}", ah.GetAgentRun)
+		r.Delete("/agents/{definition}/runs/{id}", ah.CancelAgentRun)
+		r.Post("/agents/{definition}/sessions/{sessionID}/continue", ah.ContinueAgent)
 		r.Put("/sync", ah.Sync)
 		r.Post("/llm/stream", ah.LLMStream)
 		r.Post("/llm/image", ah.ImageGenerate)
@@ -887,7 +927,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	handler = RealIP(cfg.RealIP)(handler)
 	handler = chimw.RequestID(handler)
 	handler = chimw.Recoverer(handler)
-	return handler
+	owned.Handler = handler
+	go func() { defer close(owned.agentRunsDone); agentRuns.Run(agentCtx) }()
+	return owned
 }
 
 func platformCORSOptions(publicURL string) cors.Options {

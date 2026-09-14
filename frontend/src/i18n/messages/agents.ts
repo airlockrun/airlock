@@ -749,10 +749,6 @@ export const agentMessages = defineMessages({
     defaultMessage: 'Schedules',
     description: 'App detail navigation section for schedules.',
   },
-  'agents.detail.section.siblings': {
-    defaultMessage: 'Siblings',
-    description: 'App detail navigation section for sibling app relationships.',
-  },
   'agents.detail.section.access': {
     defaultMessage: 'Access',
     description: 'App detail navigation section for access settings.',
@@ -985,13 +981,9 @@ export const agentMessages = defineMessages({
     defaultMessage: 'Lowercase letters, digits and single dashes (2–63 chars).',
     description: 'Help text listing valid app slug characters and length.',
   },
-  'agents.detail.slugWarningBeforeBinding': {
-    defaultMessage: 'Changing the slug re-points sibling',
-    description: 'Slug change warning immediately before the immutable agent_<slug> binding pattern.',
-  },
-  'agents.detail.slugWarningAfterBinding': {
-    defaultMessage: 'bindings and breaks any externally-configured MCP URL using the old slug. In-app links keep working.',
-    description: 'Slug change warning after the immutable binding pattern. Keep MCP unchanged.',
+  'agents.detail.slugWarning': {
+    defaultMessage: 'Changing the slug breaks externally-configured MCP URLs using that slug. In-app links keep working.',
+    description: 'Warning about external MCP URLs when changing an app slug.',
   },
   'agents.detail.cloneTitle': {
     defaultMessage: 'Clone app',

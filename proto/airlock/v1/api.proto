@@ -227,6 +227,7 @@ message GetAgentSDKInfoResponse {
   string command_import = 2;
   string airlock_url = 3;
   string launcher_import = 4;
+  string agent_base_image = 5;
 }
 
 // --- Agents ---
@@ -289,8 +290,7 @@ message UpdateAgentRequest {
   reserved 3, 4;
   reserved "build_model", "exec_model";
   // Rename: omitted (null) leaves the field unchanged. slug must stay
-  // unique and kebab-shaped; changing it re-points sibling agent_<slug>
-  // bindings and any externally-configured MCP URL.
+  // unique and kebab-shaped; external MCP URLs using the slug must match it.
   optional string name = 5;
   optional string slug = 6;
 }
@@ -493,13 +493,8 @@ message PendingConfirmation {
   string tool_call_id = 1;
   string tool_name = 2;
   string input = 3;  // JSON-encoded tool input (direct run_js confirmation)
-  // permission/patterns/code carry the confirmation detail for a
-  // delegated (A2A) suspension — a sub-agent's request_confirmation that
-  // surfaced through promptAgent. Mirrors ConfirmationRequiredEvent so
-  // the UI renders it the same as a live confirmation.
-  string permission = 4;
-  repeated string patterns = 5;
-  string code = 6;
+  reserved 4, 5, 6;
+  reserved "permission", "patterns", "code";
   // run_id is the suspended run this confirmation belongs to. The client
   // sends it back as resume_run_id on approve/deny so the backend resumes
   // THIS run rather than guessing the conversation's latest suspended one.
@@ -823,32 +818,6 @@ message GenerateRelayCodeRequest {
 message GenerateRelayCodeResponse {
   string code = 1;
   string callback_url = 2;
-}
-
-// --- Siblings (A2A) ---
-
-message ListSiblingsResponse {
-  repeated SiblingInfo siblings = 1;
-}
-
-message ListAddableSiblingsResponse {
-  repeated AddableSiblingInfo agents = 1;
-}
-
-message ListInboundSiblingsResponse {
-  repeated InboundSiblingInfo siblings = 1;
-}
-
-message GetAgentSharingResponse {
-  A2ASettings settings = 1;
-}
-
-message UpdateAgentSharingRequest {
-  A2ASettings settings = 1;
-}
-
-message UpdateAgentSharingResponse {
-  A2ASettings settings = 1;
 }
 
 // --- Connection setup status ---

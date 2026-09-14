@@ -404,12 +404,13 @@ onMounted(load)
 <style scoped>
 .connector-needs, .skeletons, .resource-list, .requirement-list, .group-dialog, .group-reasons, .field { display: flex; flex-direction: column; }
 .connector-needs { gap: 1rem; }
-.connector-need { border: 1px solid var(--p-content-border-color); border-radius: 0.75rem; overflow: hidden; }
+.connector-need { border: 1px solid var(--p-content-border-color); border-radius: 0.75rem; overflow: hidden; overflow-wrap: anywhere; }
 .connector-need > header, .connector-need > section, .connector-need > footer { padding: 1rem; }
 .connector-need > section, .connector-need > footer { border-top: 1px solid var(--p-content-border-color); }
 .need-header, .contract-heading, .resource-heading, .need-actions, .resource-row, .resource-state, .requirement-row span { display: flex; align-items: center; gap: 0.65rem; }
 .need-header, .contract-heading, .resource-heading, .resource-row { justify-content: space-between; }
 .need-header { align-items: flex-start; }
+.contract-heading { flex-wrap: wrap; }
 .need-header p { margin: 0.45rem 0 0; }
 .need-title { font-size: 1.05rem; font-weight: 650; }
 .header-tags, .resource-state { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem; }

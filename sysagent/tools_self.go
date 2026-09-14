@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 
 	"github.com/airlockrun/airlock/convert"
-	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/sysagent/agentview"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (s *Service) selfTools() []tool.Tool {
@@ -86,13 +84,7 @@ func (s *Service) toolWhoami() tool.Tool {
 				return errResult(err), nil
 			}
 
-			// Membership list — kept as a direct dbq read because it's
-			// an agent-axis query (not a user-axis one) and we don't
-			// have a dedicated service surface for "what agents am I in"
-			// yet. Explicit per-user grants only (same shape as the old
-			// membership list); group-derived access isn't expanded here.
-			q := dbq.New(s.db.Pool())
-			rows, err := q.ListUserAgentGrants(ctx, pgtype.UUID{Bytes: p.UserID, Valid: true})
+			rows, err := s.domain.UserAgentGrants(ctx, p)
 			if err != nil {
 				return errResult(err), nil
 			}
@@ -119,7 +111,10 @@ func (s *Service) toolWhoami() tool.Tool {
 					out.AgentAccess = "not_found"
 				} else {
 					out.AgentSlug = a.Slug
-					out.AgentAccess = effectiveAccess(ctx, q, p, uuid.UUID(a.ID.Bytes))
+					out.AgentAccess, err = s.domain.AgentAccess(ctx, p, uuid.UUID(a.ID.Bytes))
+					if err != nil {
+						return errResult(err), nil
+					}
 				}
 			}
 			return okResult(out)

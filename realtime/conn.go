@@ -29,13 +29,17 @@ type Conn struct {
 	// TenantRole is fixed for the lifetime of the connection. The live
 	// authorization monitor closes the connection if the user's role changes.
 	TenantRole auth.Role
+	// Identity is the immutable admission proof, installed before registration.
+	Identity *auth.Identity
 	// SinceSeq is the client's replay cursor from the ?since= connect
-	// param: the max Envelope.Seq it has already processed. Set once by
+	// param: the lowest processed per-topic watermark. Set once by
 	// the WS accept handler before the Subscribe loop; the hub replays
 	// only seq>SinceSeq per topic (0 = fresh connect, no replay).
 	SinceSeq   uint64
 	ws         *websocket.Conn
 	send       chan []byte
+	sendMu     sync.Mutex
+	overflowed bool
 	disconnect context.CancelFunc
 	logger     *zap.Logger
 	jobsMu     sync.RWMutex
@@ -93,32 +97,27 @@ func (c *Conn) JobsSubscriptions() []uuid.UUID {
 	return agentIDs
 }
 
-// Send enqueues a message for writing. Non-blocking: drops if buffer full.
+// Send enqueues a message without blocking. Disconnect on overflow: dropping a
+// delta while accepting a later sequence would make the loss unreplayable.
 func (c *Conn) Send(data []byte) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.overflowed {
+		return
+	}
 	select {
 	case c.send <- data:
 	default:
-		c.logger.Warn("send buffer full, dropping message")
+		c.overflowed = true
+		c.logger.Warn("send buffer full, disconnecting")
+		c.disconnect()
 	}
 }
 
-// SendEnvelope marshals and enqueues an envelope. Correctness control messages
-// disconnect a slow client instead of being dropped so it reloads state.
+// SendEnvelope marshals and enqueues an envelope.
 func (c *Conn) SendEnvelope(env Envelope) {
 	data, err := json.Marshal(env)
 	if err != nil {
-		return
-	}
-	if env.Type == "resync" || env.Type == "jobs.subscribed" {
-		select {
-		case c.send <- data:
-		default:
-			c.logger.Warn("required control envelope could not be queued", zap.String("type", env.Type))
-			if c.disconnect == nil {
-				panic("realtime: nil connection disconnect")
-			}
-			c.disconnect()
-		}
 		return
 	}
 	c.Send(data)

@@ -9,10 +9,12 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/authz"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/execution"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -36,6 +38,7 @@ type Caller struct {
 	ConversationID uuid.UUID
 	RunID          uuid.UUID
 	ParentRunID    uuid.UUID
+	ScopeBound     bool
 }
 
 type ResolvedPath struct {
@@ -70,22 +73,50 @@ func (s *Service) Resolve(ctx context.Context, caller Caller, agentID uuid.UUID,
 
 func (s *Service) ResolveForRun(ctx context.Context, agentID, runID uuid.UUID, path string, op Operation) (ResolvedPath, error) {
 	q := dbq.New(s.db.Pool())
-	if err := authz.Authorize(ctx, q, authz.TriggerPrincipal(), authz.AgentFileResolve, agentID); err != nil {
+	admitted, err := execution.Resolve(ctx, q, agentID, runID)
+	if err != nil {
 		return ResolvedPath{}, err
 	}
-	run, err := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{ID: dbUUID(runID), AgentID: dbUUID(agentID)})
+	return s.ResolveForRuntime(ctx, admitted.Runtime, path, op)
+}
+
+// ResolveForRuntime applies the broker's live access ceiling to the durable run
+// identity. A grant downgrade cannot retain access through an older run snapshot.
+func (s *Service) ResolveForRuntime(ctx context.Context, scope wire.RuntimeContext, path string, op Operation) (ResolvedPath, error) {
+	agentID, err := uuid.Parse(scope.AgentID)
 	if err != nil {
-		return ResolvedPath{}, service.ErrNotFound
+		return ResolvedPath{}, service.ErrInvalidInput
 	}
-	caller := Caller{Principal: authz.TriggerPrincipal(), Access: agentsdk.Access(run.CallerAccess), RunID: runID}
+	runID, err := uuid.Parse(scope.RunID)
+	if err != nil {
+		return ResolvedPath{}, service.ErrInvalidInput
+	}
+	q := dbq.New(s.db.Pool())
+	admitted, err := execution.Resolve(ctx, q, agentID, runID)
+	if err != nil {
+		return ResolvedPath{}, err
+	}
+	action := authz.AgentFileResolve
+	if admitted.Origin.Actor == "app" {
+		action = authz.AppRuntime
+	}
+	if err := authz.Authorize(ctx, q, admitted.Principal, action, agentID); err != nil {
+		return ResolvedPath{}, err
+	}
+	run := admitted.Run
+	access := agentsdk.Access(scope.Caller.Access)
+	if !validAccess(access) {
+		return ResolvedPath{}, service.ErrForbidden
+	}
+	if !authz.AccessAtLeast(agentsdk.Access(admitted.Runtime.Caller.Access), access) {
+		access = agentsdk.Access(admitted.Runtime.Caller.Access)
+	}
+	caller := Caller{Principal: admitted.Principal, Access: access, RunID: runID, ScopeBound: admitted.Runtime.Definition != nil}
 	if run.CallerUserID.Valid {
 		caller.UserID = uuid.UUID(run.CallerUserID.Bytes)
 	}
 	if run.CallerConversationID.Valid {
 		caller.ConversationID = uuid.UUID(run.CallerConversationID.Bytes)
-	}
-	if run.ParentRunID.Valid {
-		caller.ParentRunID = uuid.UUID(run.ParentRunID.Bytes)
 	}
 	return resolve(ctx, q, caller, agentID, path, op)
 }
@@ -190,7 +221,7 @@ func resolveDirectoryPath(dir dbq.AgentDirectory, caller Caller, path string, op
 	if !validAccess(agentsdk.Access(required)) {
 		return "", service.ErrNotFound
 	}
-	if caller.Access == agentsdk.AccessAdmin {
+	if caller.Access == agentsdk.AccessAdmin && !caller.ScopeBound {
 		return path, nil
 	}
 	if dir.Path == "__incoming" {
@@ -248,8 +279,8 @@ func resolveIncomingPath(caller Caller, path string, op Operation) (string, erro
 	if caller.ConversationID != uuid.Nil {
 		allowed = append(allowed, "conv-"+caller.ConversationID.String())
 	}
-	if caller.ParentRunID != uuid.Nil {
-		allowed = append(allowed, "run-"+caller.ParentRunID.String())
+	if caller.RunID != uuid.Nil {
+		allowed = append(allowed, "run-"+caller.RunID.String())
 	}
 	for _, expected := range allowed {
 		if segment == expected {

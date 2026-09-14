@@ -19,11 +19,9 @@ import (
 const FilesManifestSource = "llm"
 
 // PostFilesManifest writes the attached-files manifest as its own
-// conversation message — the single, canonical way file attachments are
-// described to the model. agentsdk no longer inlines a manifest into the
-// prompt; every files-bearing ingress (web / bridge / A2A) calls this
-// instead, BEFORE dispatch, so the row is in history when the agent's
-// SessionStore loads. No-op when there are no files.
+// conversation message, describing file attachments to the model. Web and
+// bridge ingress call this before dispatch so the row is in history when
+// the hosted SessionStore loads. No-op when there are no files.
 //
 // Persist-only (q.CreateMessage) — deliberately NOT postToConversation:
 // the manifest is model-only and must never reach a human WS or bridge
