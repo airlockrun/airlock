@@ -21,16 +21,32 @@ if ! getent passwd "$uid" >/dev/null 2>&1; then
 fi
 
 # Compose also starts this image with `true` as an image-carrier dependency.
-# Only a real toolserver process has an agent workspace to prepare.
-if [ "${1##*/}" = "toolserver" ]; then
+# Toolserver startup and runtime warmup share the same preparation and Go settings.
+if [ "${1##*/}" = "toolserver" ] || [ "$1" = "--warm-runtime-caches" ]; then
+    phase=workspace
+    trap 'status=$?; if [ "$status" -ne 0 ]; then echo "agent-builder: phase=$phase failed status=$status" >&2; fi' EXIT
     if [ ! -f go.mod ]; then
-        echo "agent-builder: toolserver workspace has no go.mod" >&2
+        echo "agent-builder: workspace has no go.mod" >&2
         exit 1
     fi
     # Reconcile the module first so module-local tools resolve on a fresh
     # scaffold, then project the version-matched frontend cache.
+    phase=mod-tidy
+    echo "agent-builder: phase=$phase starting" >&2
     go mod tidy
+    phase=air-toolchain-install
+    echo "agent-builder: phase=$phase starting" >&2
     go tool air toolchain install
+    echo "agent-builder: preparation complete" >&2
+    if [ "$1" = "--warm-runtime-caches" ]; then
+        phase=stub-build
+        echo "agent-builder: phase=$phase starting" >&2
+        go build -o /tmp/agent .
+        echo "agent-builder: runtime warmup complete" >&2
+        exit 0
+    fi
+    phase=toolserver-exec
+    echo "agent-builder: phase=$phase starting (awaiting listener)" >&2
 fi
 
 exec "$@"

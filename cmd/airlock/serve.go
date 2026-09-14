@@ -294,7 +294,6 @@ func runServe(_ []string) {
 
 	group, gctx := errgroup.WithContext(ctx)
 	group.Go(func() error { buildSvc.WarmBuildCache(gctx); return nil })
-	group.Go(func() error { buildSvc.WarmRuntimeCaches(gctx); return nil })
 	group.Go(func() error {
 		return connectorArtifactsService.Run(gctx)
 	})
@@ -331,7 +330,15 @@ func runServe(_ []string) {
 		logger.Fatal("build service recovery failed", zap.Error(err))
 	}
 	logger.Info("build service ready")
-	group.Go(func() error { buildSvc.RebuildAllOnSDKChange(gctx); return nil })
+	group.Go(func() error {
+		// Cache volumes are local to this worker's Docker daemon. Every replica
+		// warms its own caches before entering the database-coordinated builds.
+		if err := buildSvc.WarmRuntimeCaches(gctx); err != nil {
+			return fmt.Errorf("startup mass-rebuild blocked: %w", err)
+		}
+		buildSvc.RebuildAllOnSDKChange(gctx)
+		return nil
+	})
 
 	// Start background trigger services
 	if err := bridgeMgr.Start(gctx); err != nil {

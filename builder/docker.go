@@ -3,6 +3,7 @@ package builder
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -245,33 +246,24 @@ func (b *BuildService) WarmBuildCache(ctx context.Context) {
 	b.logger.Info("build cache warmed")
 }
 
-// WarmRuntimeCaches seeds the named volumes that the build-prompt loop's
-// direct `go mod tidy` / `go build` invocations consume — distinct from
-// the BuildKit cache mount that WarmBuildCache populates. The agent-builder
-// container at runtime sets GOMODCACHE=/tmp/go-mod and GOCACHE=/tmp/go-cache
-// (see container/docker.go) backed by the instance-scoped
-// <instance>-go-mod-cache and <instance>-go-build-cache Docker named
-// volumes. Without this seed, the
-// first build-prompt iteration pays full download cost for ~25 modules
-// in agentsdk+sol's transitive dep tree. The volumes persist across
-// airlock restarts.
-func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
+// WarmRuntimeCaches runs the agent-builder's shared startup preparation,
+// including compilation of the module-local air CLI, then builds an SDK stub.
+// It seeds the toolserver's instance-scoped Go volumes, not BuildKit's caches.
+// Application-specific dependencies and other module tools can still be cold.
+func (b *BuildService) WarmRuntimeCaches(ctx context.Context) error {
 	if b.cfg.AgentBuilderImage == "" {
-		b.logger.Warn("warm runtime caches: agent-builder image empty — skipping")
-		return
+		return errors.New("warm runtime caches: agent-builder image empty")
 	}
 
 	dir, err := b.makeCodegenTempDir("airlock-runtime-warm-*")
 	if err != nil {
-		b.logger.Warn("warm runtime caches: create temp dir", zap.Error(err))
-		return
+		return fmt.Errorf("warm runtime caches: create temp dir: %w", err)
 	}
 	defer os.RemoveAll(dir)
 
 	sdkVer, verErr := b.agentSDKVersion()
 	if verErr != nil {
-		b.logger.Warn("warm runtime caches: agent sdk version", zap.Error(verErr))
-		return
+		return fmt.Errorf("warm runtime caches: agent sdk version: %w", verErr)
 	}
 
 	if err := scaffold.Materialize(dir, scaffold.ScaffoldData{
@@ -280,16 +272,13 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		AgentSDKVersion: sdkVer,
 		AgentBaseImage:  b.cfg.AgentBaseImage,
 	}); err != nil {
-		b.logger.Warn("warm runtime caches: scaffold", zap.Error(err))
-		return
+		return fmt.Errorf("warm runtime caches: scaffold: %w", err)
 	}
 
-	// Stub main.go — same rationale as WarmBuildCache. We just want a
-	// successful `go mod tidy && go build` to populate the volumes.
+	// The stub warms SDK imports; the entrypoint also compiles and runs air.
 	stub := []byte("package main\n\nimport _ \"github.com/a-h/templ\"\nimport _ \"github.com/airlockrun/agentsdk\"\n\nfunc main() {}\n")
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), stub, 0o644); err != nil {
-		b.logger.Warn("warm runtime caches: write stub main.go", zap.Error(err))
-		return
+		return fmt.Errorf("warm runtime caches: write stub main.go: %w", err)
 	}
 
 	uid := os.Getuid()
@@ -298,8 +287,7 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 	// Dev: generate the local lib proxy. Prod: empty — public proxy.
 	proxyDir, cleanup, err := b.ensureLibProxy()
 	if err != nil {
-		b.logger.Warn("warm runtime caches: generate lib proxy", zap.Error(err))
-		return
+		return fmt.Errorf("warm runtime caches: generate lib proxy: %w", err)
 	}
 	defer cleanup()
 
@@ -336,12 +324,12 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		// the lookup entirely — the public proxy and the local lib proxy
 		// serve content we don't authenticate via sum.golang.org.
 		"-e", "GOSUMDB=off",
+		"-e", "GONOSUMDB=*",
 		"-v", vp + "go-mod-cache:/tmp/go-mod",
 		"-v", vp + "go-build-cache:/tmp/go-cache",
 		"-v", workspaceMount,
 		"-w", workspaceDir,
 	}
-	cmd := "go mod tidy && go build -o /tmp/agent ."
 	// Dev: mount the local lib proxy and point GOPROXY at it (public proxy
 	// second). The proxy serves each owned lib at a content-addressed
 	// version, so changed source is a new version — Go fetches it fresh with
@@ -350,16 +338,18 @@ func (b *BuildService) WarmRuntimeCaches(ctx context.Context) {
 		args = append(args, "-v", proxyDir+":/goproxy:ro",
 			"-e", "GOPROXY=file:///goproxy,https://proxy.golang.org")
 	}
-	args = append(args, b.cfg.AgentBuilderImage, "sh", "-c", cmd)
+	args = append(args, b.cfg.AgentBuilderImage, "--warm-runtime-caches")
 
+	b.logger.Info("runtime cache warmup starting", zap.String("image", b.cfg.AgentBuilderImage))
 	dcmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := dcmd.CombinedOutput()
 	if err != nil {
 		b.logger.Warn("warm runtime caches: docker run failed", zap.String("output", string(out)), zap.Error(err))
-		return
+		return fmt.Errorf("warm runtime caches: docker run: %w", err)
 	}
 
 	b.logger.Info("runtime caches warmed")
+	return nil
 }
 
 // runAndStream runs a command and streams its combined output line by line via logFn.
