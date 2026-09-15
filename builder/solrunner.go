@@ -24,9 +24,9 @@ import (
 	solprovider "github.com/airlockrun/sol/provider"
 	soltools "github.com/airlockrun/sol/tools"
 	"github.com/airlockrun/sol/websearch"
-	dmount "github.com/docker/docker/api/types/mount"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	dmount "github.com/moby/moby/api/types/mount"
 	"go.uber.org/zap"
 )
 

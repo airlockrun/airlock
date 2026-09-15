@@ -4,8 +4,8 @@ package container
 import (
 	"context"
 
-	"github.com/docker/docker/api/types/mount"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/mount"
 )
 
 // RuntimeNetworkPolicy selects the Docker network boundary for an agent

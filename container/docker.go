@@ -17,22 +17,24 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/config"
 	cerrdefs "github.com/containerd/errdefs"
-	dcontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	dmount "github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	dcontainer "github.com/moby/moby/api/types/container"
+	dmount "github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	dockerclient "github.com/moby/moby/client"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 // AgentStartupHealthTimeout bounds cold runtime initialization, including
 // migrations and process-local startup hooks that complete before readiness.
 const AgentStartupHealthTimeout = 2 * time.Minute
+
+// Network coordination sessions never borrow request-pool connections.
+const agentNetworkConnections = 4
 
 // DockerManager implements ContainerManager using the Docker API.
 type DockerManager struct {
@@ -40,6 +42,7 @@ type DockerManager struct {
 	cfg                    *config.Config
 	logger                 *zap.Logger
 	pool                   *pgxpool.Pool
+	networkSlots           *semaphore.Weighted
 	networkPolicy          RuntimeNetworkPolicy
 	mu                     sync.Mutex
 	active                 map[string]*Container // container name → Container
@@ -63,7 +66,7 @@ func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, networkPolicy Runt
 	if networkPolicy == nil {
 		panic("container: runtime network policy is required")
 	}
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		panic(fmt.Sprintf("docker: failed to create client: %v", err))
 	}
@@ -73,6 +76,7 @@ func NewDockerManager(cfg *config.Config, pool *pgxpool.Pool, networkPolicy Runt
 		cfg:                    cfg,
 		logger:                 logger,
 		pool:                   pool,
+		networkSlots:           semaphore.NewWeighted(agentNetworkConnections),
 		networkPolicy:          networkPolicy,
 		active:                 make(map[string]*Container),
 		lastActivity:           make(map[string]time.Time),
@@ -99,7 +103,7 @@ func (m *DockerManager) cleanupOrphanedBuilderContainers() {
 
 	f := m.instanceFilter()
 	f.Add("name", m.builderPrefix())
-	containers, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
+	containers, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All:     true,
 		Filters: f,
 	})
@@ -107,9 +111,9 @@ func (m *DockerManager) cleanupOrphanedBuilderContainers() {
 		m.logger.Warn("failed to list orphaned agent-builder containers", zap.Error(err))
 		return
 	}
-	for _, c := range containers {
-		m.logger.Info("removing orphaned agent-builder container", zap.String("id", c.ID[:12]), zap.String("state", c.State))
-		m.client.ContainerRemove(ctx, c.ID, dcontainer.RemoveOptions{Force: true})
+	for _, c := range containers.Items {
+		m.logger.Info("removing orphaned agent-builder container", zap.String("id", c.ID[:12]), zap.String("state", string(c.State)))
+		m.client.ContainerRemove(ctx, c.ID, dockerclient.ContainerRemoveOptions{Force: true})
 	}
 }
 
@@ -142,14 +146,14 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 	agentPrefix := m.agentPrefix()
 
 	// --- Containers ---
-	containers, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
+	containers, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All:     true,
 		Filters: m.instanceFilter(),
 	})
 	if err != nil {
 		m.logger.Warn("prune: failed to list containers", zap.Error(err))
 	} else {
-		for _, c := range containers {
+		for _, c := range containers.Items {
 			// Container names are "/<instance>-agent-{first8}"
 			name := ""
 			for _, n := range c.Names {
@@ -165,16 +169,17 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 			agentID, ok := prefixToID[prefix]
 			if !ok {
 				m.logger.Info("prune: removing orphaned container",
-					zap.String("name", name), zap.String("state", c.State))
+					zap.String("name", name), zap.String("state", string(c.State)))
 				timeout := 5
-				m.client.ContainerStop(ctx, c.ID, dcontainer.StopOptions{Timeout: &timeout})
-				m.client.ContainerRemove(ctx, c.ID, dcontainer.RemoveOptions{Force: true})
+				m.client.ContainerStop(ctx, c.ID, dockerclient.ContainerStopOptions{Timeout: &timeout})
+				m.client.ContainerRemove(ctx, c.ID, dockerclient.ContainerRemoveOptions{Force: true})
 				continue
 			}
 
 			spec := validAgents[agentID]
 			desired, issueErr := auth.IssueAgentToken(m.cfg.JWTSecret, uuid.MustParse(agentID), spec.TokenVersion)
-			info, inspectErr := m.client.ContainerInspect(ctx, c.ID)
+			inspected, inspectErr := m.client.ContainerInspect(ctx, c.ID, dockerclient.ContainerInspectOptions{})
+			info := inspected.Container
 			token := ""
 			image := ""
 			if inspectErr == nil && info.Config != nil {
@@ -183,8 +188,8 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 			}
 			if issueErr != nil || inspectErr != nil || image != spec.Image || !reusableAgentToken(m.cfg.JWTSecret, token, desired, time.Now()) {
 				m.logger.Info("prune: removing stale agent container",
-					zap.String("name", name), zap.String("state", c.State))
-				m.client.ContainerRemove(ctx, c.ID, dcontainer.RemoveOptions{Force: true})
+					zap.String("name", name), zap.String("state", string(c.State)))
+				m.client.ContainerRemove(ctx, c.ID, dockerclient.ContainerRemoveOptions{Force: true})
 				if c.State == "running" && spec.Status == "active" {
 					recreate = append(recreate, uuid.MustParse(agentID))
 				}
@@ -197,13 +202,13 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 	// Agent images are tagged as "{agentUUID}:{commitHash}" and carry this
 	// instance's ownership label (set at build time via --label), so the
 	// filter keeps another instance's images out of the prune set.
-	images, err := m.client.ImageList(ctx, image.ListOptions{Filters: m.instanceFilter()})
+	images, err := m.client.ImageList(ctx, dockerclient.ImageListOptions{Filters: m.instanceFilter()})
 	if err != nil {
 		m.logger.Warn("prune: failed to list images", zap.Error(err))
 		return recreate
 	}
 
-	for _, img := range images {
+	for _, img := range images.Items {
 		for _, tag := range img.RepoTags {
 			// Only look at UUID-formatted repo names (agent images).
 			if len(tag) < 36 || tag[8] != '-' {
@@ -215,12 +220,12 @@ func (m *DockerManager) PruneAgentResources(ctx context.Context, validAgents map
 				// Agent deleted — remove image entirely.
 				m.logger.Info("prune: removing image for deleted agent",
 					zap.String("image", tag))
-				m.client.ImageRemove(ctx, tag, image.RemoveOptions{PruneChildren: true})
+				m.client.ImageRemove(ctx, tag, dockerclient.ImageRemoveOptions{PruneChildren: true})
 			} else if tag != spec.Image && spec.Image != "" {
 				// Stale tag — agent was upgraded, old image still around.
 				m.logger.Info("prune: removing stale image tag",
 					zap.String("image", tag), zap.String("current", spec.Image))
-				m.client.ImageRemove(ctx, tag, image.RemoveOptions{PruneChildren: true})
+				m.client.ImageRemove(ctx, tag, dockerclient.ImageRemoveOptions{PruneChildren: true})
 			}
 		}
 	}
@@ -262,8 +267,8 @@ func (m *DockerManager) builderPrefix() string { return m.cfg.InstanceID + "-age
 
 // instanceFilter scopes a Docker list call to this instance's resources
 // via the ownership label.
-func (m *DockerManager) instanceFilter() filters.Args {
-	return filters.NewArgs(filters.Arg("label", labelInstance+"="+m.cfg.InstanceID))
+func (m *DockerManager) instanceFilter() dockerclient.Filters {
+	return make(dockerclient.Filters).Add("label", labelInstance+"="+m.cfg.InstanceID)
 }
 
 func (m *DockerManager) agentName(agentID uuid.UUID) string {
@@ -353,7 +358,7 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 				zap.String("have", c.Image),
 				zap.String("want", opts.Image))
 		}
-		if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil {
+		if _, err := m.client.ContainerRemove(ctx, name, dockerclient.ContainerRemoveOptions{Force: true}); err != nil {
 			m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 		}
 	}
@@ -379,8 +384,8 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 		Labels: map[string]string{
 			labelAgentID: opts.AgentID.String(),
 		},
-		ExposedPorts: nat.PortSet{
-			"8080/tcp": struct{}{},
+		ExposedPorts: network.PortSet{
+			network.MustParsePort("8080/tcp"): struct{}{},
 		},
 	}
 
@@ -403,9 +408,11 @@ func (m *DockerManager) StartAgent(ctx context.Context, opts AgentOpts) (*Contai
 	m.mu.Unlock()
 
 	if err := m.waitHealthy(ctx, c, AgentStartupHealthTimeout); err != nil {
-		_ = m.client.ContainerRemove(context.Background(), c.ID, dcontainer.RemoveOptions{Force: true})
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = m.client.ContainerRemove(cleanup, c.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		if m.cfg.AgentNetworkPerAgent {
-			_ = m.cleanupAgentNetwork(context.Background(), opts.AgentID)
+			_ = m.cleanupAgentNetwork(cleanup, opts.AgentID)
 		}
 		return nil, fmt.Errorf("agent health check: %w", err)
 	}
@@ -472,15 +479,15 @@ func (m *DockerManager) GetRunning(ctx context.Context, agentID uuid.UUID) (*Con
 // ("<instance>-agent-builder-*") also carry the label but never equal an
 // agentName(id), so they fall out of the lookup harmlessly.
 func (m *DockerManager) RunningAgents(ctx context.Context, agentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
-	list, err := m.client.ContainerList(ctx, dcontainer.ListOptions{
+	list, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{
 		Filters: m.instanceFilter(),
 	})
 	if err != nil {
 		return nil, err
 	}
 	// ContainerList without All:true returns only running containers.
-	running := make(map[string]struct{}, len(list))
-	for _, c := range list {
+	running := make(map[string]struct{}, len(list.Items))
+	for _, c := range list.Items {
 		for _, n := range c.Names {
 			running[strings.TrimPrefix(n, "/")] = struct{}{}
 		}
@@ -509,13 +516,13 @@ func (m *DockerManager) StopAgent(ctx context.Context, agentID uuid.UUID) error 
 	name := m.agentName(agentID)
 
 	timeout := 5
-	err = m.client.ContainerStop(ctx, name, dcontainer.StopOptions{Timeout: &timeout})
+	_, err = m.client.ContainerStop(ctx, name, dockerclient.ContainerStopOptions{Timeout: &timeout})
 	if err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	// Best-effort remove (unchanged): a not-found / already-removing
 	// container is fine — the goal state is reached either way.
-	if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
+	if _, err := m.client.ContainerRemove(ctx, name, dockerclient.ContainerRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	// Cache cleanup: drop the in-memory entry keyed by the container name.
@@ -534,7 +541,7 @@ func (m *DockerManager) StopAgent(ctx context.Context, agentID uuid.UUID) error 
 
 // RemoveImage removes a Docker image by reference.
 func (m *DockerManager) RemoveImage(ctx context.Context, imageRef string) error {
-	_, err := m.client.ImageRemove(ctx, imageRef, image.RemoveOptions{PruneChildren: true})
+	_, err := m.client.ImageRemove(ctx, imageRef, dockerclient.ImageRemoveOptions{PruneChildren: true})
 	return err
 }
 
@@ -551,32 +558,32 @@ func (m *DockerManager) InspectManifest(ctx context.Context, imageRef string) (m
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manifestCleanupTimeout)
 		defer cancel()
-		if err := m.client.ContainerRemove(cleanupCtx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := m.client.ContainerRemove(cleanupCtx, name, dockerclient.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			manifest = nil
 			retErr = errors.Join(retErr, fmt.Errorf("remove manifest container: %w", err))
 		}
 	}()
 
-	resp, err := m.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
+	resp, err := m.client.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: containerCfg, HostConfig: hostCfg, Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("create manifest container: %w", err)
 	}
 
-	if err := m.client.ContainerStart(ctx, resp.ID, dcontainer.StartOptions{}); err != nil {
+	if _, err := m.client.ContainerStart(ctx, resp.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		return nil, fmt.Errorf("start manifest container: %w", err)
 	}
 
-	statusCh, errCh := m.client.ContainerWait(ctx, resp.ID, dcontainer.WaitConditionNotRunning)
+	wait := m.client.ContainerWait(ctx, resp.ID, dockerclient.ContainerWaitOptions{Condition: dcontainer.WaitConditionNotRunning})
 	var status dcontainer.WaitResponse
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("wait for manifest container: %w", ctx.Err())
-	case err := <-errCh:
+	case err := <-wait.Error:
 		if err == nil {
 			err = errors.New("Docker wait ended without a status")
 		}
 		return nil, fmt.Errorf("wait for manifest container: %w", err)
-	case waitStatus, ok := <-statusCh:
+	case waitStatus, ok := <-wait.Result:
 		if !ok {
 			return nil, errors.New("wait for manifest container: Docker wait ended without a status")
 		}
@@ -585,7 +592,7 @@ func (m *DockerManager) InspectManifest(ctx context.Context, imageRef string) (m
 
 	stdout := &boundedBuffer{limit: maxManifestStdoutBytes}
 	stderr := &boundedBuffer{limit: maxManifestStderrBytes}
-	logs, err := m.client.ContainerLogs(ctx, resp.ID, dcontainer.LogsOptions{
+	logs, err := m.client.ContainerLogs(ctx, resp.ID, dockerclient.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 	})
@@ -839,28 +846,28 @@ func (m *DockerManager) runConnectorContainer(ctx context.Context, purpose strin
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manifestCleanupTimeout)
 		defer cancel()
-		if err := m.client.ContainerRemove(cleanupCtx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := m.client.ContainerRemove(cleanupCtx, name, dockerclient.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			retErr = errors.Join(retErr, fmt.Errorf("remove connector %s container: %w", purpose, err))
 		}
 	}()
-	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, nil, nil, name)
+	resp, err := m.client.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg, Name: name})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create container: %w", err)
 	}
-	if err := m.client.ContainerStart(ctx, resp.ID, dcontainer.StartOptions{}); err != nil {
+	if _, err := m.client.ContainerStart(ctx, resp.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		return nil, nil, fmt.Errorf("start container: %w", err)
 	}
-	statusCh, errCh := m.client.ContainerWait(ctx, resp.ID, dcontainer.WaitConditionNotRunning)
+	wait := m.client.ContainerWait(ctx, resp.ID, dockerclient.ContainerWaitOptions{Condition: dcontainer.WaitConditionNotRunning})
 	var status dcontainer.WaitResponse
 	select {
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
-	case err := <-errCh:
+	case err := <-wait.Error:
 		if err == nil {
 			err = errors.New("Docker wait ended without a status")
 		}
 		return nil, nil, err
-	case waitStatus, ok := <-statusCh:
+	case waitStatus, ok := <-wait.Result:
 		if !ok {
 			return nil, nil, errors.New("Docker wait ended without a status")
 		}
@@ -868,7 +875,7 @@ func (m *DockerManager) runConnectorContainer(ctx context.Context, purpose strin
 	}
 	stdout = &boundedBuffer{limit: maxManifestStdoutBytes}
 	stderr = &boundedBuffer{limit: maxManifestStderrBytes}
-	logs, err := m.client.ContainerLogs(ctx, resp.ID, dcontainer.LogsOptions{ShowStdout: true, ShowStderr: true})
+	logs, err := m.client.ContainerLogs(ctx, resp.ID, dockerclient.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
 		return stdout, stderr, err
 	}
@@ -1002,8 +1009,8 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 		Cmd:        cmd,
 		User:       fmt.Sprintf("%d:%d", uid, gid),
 		WorkingDir: opts.WorkDir,
-		ExposedPorts: nat.PortSet{
-			"8080/tcp": struct{}{},
+		ExposedPorts: network.PortSet{
+			network.MustParsePort("8080/tcp"): struct{}{},
 		},
 	}
 
@@ -1037,7 +1044,7 @@ func (m *DockerManager) StartToolserver(ctx context.Context, opts ToolserverOpts
 
 	if err := m.waitHealthy(ctx, c, 15*time.Second); err != nil {
 		m.captureToolserverDiagnostics(context.Background(), name, "failed to start")
-		m.client.ContainerRemove(context.Background(), c.ID, dcontainer.RemoveOptions{Force: true})
+		m.client.ContainerRemove(context.Background(), c.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		m.clearToolserverDiagnostics(name)
 		return nil, fmt.Errorf("toolserver health check: %w", err)
 	}
@@ -1067,15 +1074,16 @@ func buildToolserverHostConfig(cfg *config.Config, mounts []dmount.Mount) *dcont
 
 // StopToolserver stops and removes an ephemeral toolserver container.
 func (m *DockerManager) StopToolserver(ctx context.Context, name string) error {
-	if info, err := m.client.ContainerInspect(ctx, name); err == nil && info.State != nil && !info.State.Running {
+	if info, err := m.client.ContainerInspect(ctx, name, dockerclient.ContainerInspectOptions{}); err == nil && info.Container.State != nil && !info.Container.State.Running {
 		m.captureToolserverDiagnostics(ctx, name, "exited unexpectedly")
 	}
 	defer m.clearToolserverDiagnostics(name)
 	timeout := 5
-	if err := m.client.ContainerStop(ctx, name, dcontainer.StopOptions{Timeout: &timeout}); err != nil {
+	if _, err := m.client.ContainerStop(ctx, name, dockerclient.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		m.logger.Warn("failed to stop toolserver", zap.String("name", name), zap.Error(err))
 	}
-	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
+	_, err := m.client.ContainerRemove(ctx, name, dockerclient.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // KillToolserver force-removes an ephemeral toolserver container without
@@ -1088,7 +1096,8 @@ func (m *DockerManager) StopToolserver(ctx context.Context, name string) error {
 // nil/NotFound if the container is already gone.
 func (m *DockerManager) KillToolserver(ctx context.Context, name string) error {
 	defer m.clearToolserverDiagnostics(name)
-	return m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true})
+	_, err := m.client.ContainerRemove(ctx, name, dockerclient.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // CaptureToolserverDiagnostics snapshots abnormal tool runtime state/logs.
@@ -1138,7 +1147,8 @@ func (m *DockerManager) captureToolserverDiagnostics(ctx context.Context, name, 
 		return nil
 	}
 
-	info, inspectErr := m.client.ContainerInspect(ctx, name)
+	inspected, inspectErr := m.client.ContainerInspect(ctx, name, dockerclient.ContainerInspectOptions{})
+	info := inspected.Container
 	if inspectErr != nil {
 		m.logger.Warn("inspect toolserver for diagnostics", zap.String("name", name), zap.Error(inspectErr))
 		cb("[error] build tool runtime failed; diagnostics unavailable")
@@ -1201,7 +1211,7 @@ func toolserverStateLine(reason string, state *dcontainer.State) string {
 }
 
 func (m *DockerManager) toolserverLogTail(ctx context.Context, name string, tail int) ([]string, error) {
-	logs, err := m.client.ContainerLogs(ctx, name, dcontainer.LogsOptions{
+	logs, err := m.client.ContainerLogs(ctx, name, dockerclient.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       fmt.Sprintf("%d", tail),
@@ -1301,8 +1311,8 @@ func networkConfig(networkName string) *network.NetworkingConfig {
 	return netCfg
 }
 
-func agentNetworkCreateOptions(instanceID, agentID string, internal bool) network.CreateOptions {
-	return network.CreateOptions{
+func agentNetworkCreateOptions(instanceID, agentID string, internal bool) dockerclient.NetworkCreateOptions {
+	return dockerclient.NetworkCreateOptions{
 		Driver:   "bridge",
 		Internal: internal,
 		Labels: map[string]string{
@@ -1344,33 +1354,43 @@ func (m *DockerManager) lockAgentNetwork(ctx context.Context, agentID uuid.UUID)
 	if !m.cfg.AgentNetworkPerAgent {
 		return func() {}, nil
 	}
-	conn, err := m.pool.Acquire(ctx)
+	if err := m.networkSlots.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+	conn, err := pgx.ConnectConfig(ctx, m.pool.Config().ConnConfig)
 	if err != nil {
+		m.networkSlots.Release(1)
 		return nil, fmt.Errorf("acquire agent network lock connection: %w", err)
+	}
+	closeConn := func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		// Closing the session releases every lock, including an acquisition
+		// whose response was lost to cancellation.
+		_ = conn.Close(cleanup)
+		m.networkSlots.Release(1)
 	}
 	key := m.cfg.InstanceID + "/" + agentID.String()
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1, $2))`, key, agentNetworkLockID); err != nil {
-		conn.Release()
+		closeConn()
 		return nil, fmt.Errorf("acquire agent network lock: %w", err)
 	}
-	return func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, $2))`, key, agentNetworkLockID)
-		conn.Release()
-	}, nil
+	return closeConn, nil
 }
 
 func (m *DockerManager) agentNetworkDependencies(ctx context.Context, runningOnly bool) (map[string]dcontainer.Summary, error) {
-	f := filters.NewArgs(filters.Arg("label", config.LabelAgentNetworkAccess+"="+m.cfg.InstanceID))
-	containers, err := m.client.ContainerList(ctx, dcontainer.ListOptions{All: !runningOnly, Filters: f})
+	f := make(dockerclient.Filters).Add("label", config.LabelAgentNetworkAccess+"="+m.cfg.InstanceID)
+	containers, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{All: !runningOnly, Filters: f})
 	if err != nil {
 		return nil, fmt.Errorf("list agent network dependencies: %w", err)
 	}
-	dependencies := make(map[string]dcontainer.Summary, len(containers))
-	for _, dependency := range containers {
+	dependencies := make(map[string]dcontainer.Summary, len(containers.Items))
+	for _, dependency := range containers.Items {
 		if runningOnly && dependency.State != "running" {
 			continue
 		}
-		info, err := m.client.ContainerInspect(ctx, dependency.ID)
+		inspected, err := m.client.ContainerInspect(ctx, dependency.ID, dockerclient.ContainerInspectOptions{})
+		info := inspected.Container
 		if err != nil {
 			return nil, fmt.Errorf("inspect agent network dependency %s: %w", dependency.ID, err)
 		}
@@ -1385,7 +1405,8 @@ func (m *DockerManager) agentNetworkDependencies(ctx context.Context, runningOnl
 func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUID) error {
 	name := m.agentNetworkName(agentID)
 	internal := m.networkPolicy.Internal(agentID)
-	info, err := m.client.NetworkInspect(ctx, name, network.InspectOptions{})
+	inspected, err := m.client.NetworkInspect(ctx, name, dockerclient.NetworkInspectOptions{})
+	info := inspected.Network
 	if err == nil {
 		if err := validateAgentNetworkIdentity(info, m.cfg.InstanceID, agentID.String()); err != nil {
 			return err
@@ -1395,11 +1416,11 @@ func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUI
 			// endpoints and recreate the owned network when a distribution's
 			// policy changes. StartAgent will replace the now-disconnected runtime.
 			for id := range info.Containers {
-				if err := m.client.NetworkDisconnect(ctx, info.ID, id, true); err != nil && !cerrdefs.IsNotFound(err) {
+				if _, err := m.client.NetworkDisconnect(ctx, info.ID, dockerclient.NetworkDisconnectOptions{Container: id, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 					return fmt.Errorf("disconnect endpoint %s from network %s: %w", id, name, err)
 				}
 			}
-			if err := m.client.NetworkRemove(ctx, info.ID); err != nil && !cerrdefs.IsNotFound(err) {
+			if _, err := m.client.NetworkRemove(ctx, info.ID, dockerclient.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 				return fmt.Errorf("remove network %s for policy change: %w", name, err)
 			}
 			err = cerrdefs.ErrNotFound
@@ -1411,7 +1432,8 @@ func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUI
 				return fmt.Errorf("create managed network %s: %w", name, err)
 			}
 		}
-		info, err = m.client.NetworkInspect(ctx, name, network.InspectOptions{})
+		inspected, err = m.client.NetworkInspect(ctx, name, dockerclient.NetworkInspectOptions{})
+		info = inspected.Network
 	}
 	if err != nil {
 		return fmt.Errorf("inspect managed network %s: %w", name, err)
@@ -1437,7 +1459,7 @@ func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUI
 		if len(aliases) == 0 {
 			return fmt.Errorf("agent network dependency %s has no %s label", id, config.LabelAgentNetworkAliases)
 		}
-		if err := m.client.NetworkConnect(ctx, info.ID, id, agentDependencyEndpointSettings(aliases)); err != nil {
+		if _, err := m.client.NetworkConnect(ctx, info.ID, dockerclient.NetworkConnectOptions{Container: id, EndpointConfig: agentDependencyEndpointSettings(aliases)}); err != nil {
 			return fmt.Errorf("connect dependency %s to network %s: %w", id, name, err)
 		}
 	}
@@ -1446,7 +1468,8 @@ func (m *DockerManager) ensureAgentNetwork(ctx context.Context, agentID uuid.UUI
 
 func (m *DockerManager) cleanupAgentNetwork(ctx context.Context, agentID uuid.UUID) error {
 	name := m.agentNetworkName(agentID)
-	info, err := m.client.NetworkInspect(ctx, name, network.InspectOptions{})
+	inspected, err := m.client.NetworkInspect(ctx, name, dockerclient.NetworkInspectOptions{})
+	info := inspected.Network
 	if cerrdefs.IsNotFound(err) {
 		return nil
 	}
@@ -1466,11 +1489,11 @@ func (m *DockerManager) cleanupAgentNetwork(ctx context.Context, agentID uuid.UU
 		}
 	}
 	for id := range info.Containers {
-		if err := m.client.NetworkDisconnect(ctx, info.ID, id, true); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := m.client.NetworkDisconnect(ctx, info.ID, dockerclient.NetworkDisconnectOptions{Container: id, Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("disconnect dependency %s from network %s: %w", id, name, err)
 		}
 	}
-	if err := m.client.NetworkRemove(ctx, info.ID); err != nil && !cerrdefs.IsNotFound(err) {
+	if _, err := m.client.NetworkRemove(ctx, info.ID, dockerclient.NetworkRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 		return err
 	}
 	return nil
@@ -1480,16 +1503,13 @@ func (m *DockerManager) pruneAgentNetworks(ctx context.Context) {
 	if !m.cfg.AgentNetworkPerAgent {
 		return
 	}
-	f := filters.NewArgs(
-		filters.Arg("label", labelInstance+"="+m.cfg.InstanceID),
-		filters.Arg("label", labelResource+"="+resourceAgentNet),
-	)
-	networks, err := m.client.NetworkList(ctx, network.ListOptions{Filters: f})
+	f := make(dockerclient.Filters).Add("label", labelInstance+"="+m.cfg.InstanceID, labelResource+"="+resourceAgentNet)
+	networks, err := m.client.NetworkList(ctx, dockerclient.NetworkListOptions{Filters: f})
 	if err != nil {
 		m.logger.Warn("prune: failed to list agent networks", zap.Error(err))
 		return
 	}
-	for _, candidate := range networks {
+	for _, candidate := range networks.Items {
 		agentID, err := uuid.Parse(candidate.Labels[labelAgentID])
 		if err != nil {
 			m.logger.Warn("prune: managed agent network has invalid agent label", zap.String("network", candidate.Name))
@@ -1500,11 +1520,11 @@ func (m *DockerManager) pruneAgentNetworks(ctx context.Context) {
 			m.logger.Warn("prune: failed to lock agent network", zap.String("network", candidate.Name), zap.Error(err))
 			continue
 		}
-		info, inspectErr := m.client.NetworkInspect(ctx, candidate.ID, network.InspectOptions{})
+		info, inspectErr := m.client.NetworkInspect(ctx, candidate.ID, dockerclient.NetworkInspectOptions{})
 		dependencies, dependencyErr := m.agentNetworkDependencies(ctx, false)
 		hasRuntime := false
 		if inspectErr == nil && dependencyErr == nil {
-			for id := range info.Containers {
+			for id := range info.Network.Containers {
 				if _, trusted := dependencies[id]; !trusted {
 					hasRuntime = true
 					break
@@ -1529,7 +1549,7 @@ func (m *DockerManager) pruneAgentNetworks(ctx context.Context) {
 }
 
 func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dcontainer.Config, hostCfg *dcontainer.HostConfig, networkName string) (*Container, error) {
-	if err := m.client.ContainerRemove(ctx, name, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+	if _, err := m.client.ContainerRemove(ctx, name, dockerclient.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		m.logger.Warn("failed to remove existing container", zap.String("name", name), zap.Error(err))
 	}
 
@@ -1544,19 +1564,19 @@ func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dc
 
 	netCfg := networkConfig(networkName)
 
-	resp, err := m.client.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
+	resp, err := m.client.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg, NetworkingConfig: netCfg, Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("create container %s: %w", name, err)
 	}
 
-	if err := m.client.ContainerStart(ctx, resp.ID, dcontainer.StartOptions{}); err != nil {
-		_ = m.client.ContainerRemove(context.Background(), resp.ID, dcontainer.RemoveOptions{Force: true})
+	if _, err := m.client.ContainerStart(ctx, resp.ID, dockerclient.ContainerStartOptions{}); err != nil {
+		_, _ = m.client.ContainerRemove(context.Background(), resp.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		return nil, fmt.Errorf("start container %s: %w", name, err)
 	}
 
 	endpoint, err := m.getEndpoint(ctx, resp.ID)
 	if err != nil {
-		_ = m.client.ContainerRemove(context.Background(), resp.ID, dcontainer.RemoveOptions{Force: true})
+		_, _ = m.client.ContainerRemove(context.Background(), resp.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		return nil, err
 	}
 
@@ -1569,7 +1589,8 @@ func (m *DockerManager) createAndStart(ctx context.Context, name string, cfg *dc
 }
 
 func (m *DockerManager) inspectExisting(ctx context.Context, name string) (*Container, error) {
-	info, err := m.client.ContainerInspect(ctx, name)
+	inspected, err := m.client.ContainerInspect(ctx, name, dockerclient.ContainerInspectOptions{})
+	info := inspected.Container
 	if err != nil {
 		return nil, err
 	}
@@ -1619,13 +1640,14 @@ func (m *DockerManager) LockSwap(agentID uuid.UUID) func() {
 }
 
 func (m *DockerManager) getEndpoint(ctx context.Context, containerID string) (string, error) {
-	info, err := m.client.ContainerInspect(ctx, containerID)
+	inspected, err := m.client.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
+	info := inspected.Container
 	if err != nil {
 		return "", fmt.Errorf("inspect container: %w", err)
 	}
 
 	for _, nw := range info.NetworkSettings.Networks {
-		if nw.IPAddress != "" {
+		if nw.IPAddress.IsValid() {
 			return fmt.Sprintf("http://%s:8080", nw.IPAddress), nil
 		}
 	}
@@ -1731,8 +1753,8 @@ func (m *DockerManager) reapIdleContainers() {
 					continue
 				}
 				timeout := 5
-				m.client.ContainerStop(ctx, s.id, dcontainer.StopOptions{Timeout: &timeout})
-				m.client.ContainerRemove(ctx, s.id, dcontainer.RemoveOptions{})
+				m.client.ContainerStop(ctx, s.id, dockerclient.ContainerStopOptions{Timeout: &timeout})
+				m.client.ContainerRemove(ctx, s.id, dockerclient.ContainerRemoveOptions{})
 				if m.cfg.AgentNetworkPerAgent && s.agentID != uuid.Nil {
 					if err := m.cleanupAgentNetwork(ctx, s.agentID); err != nil {
 						m.logger.Warn("failed to remove idle agent network", zap.String("name", s.name), zap.Error(err))

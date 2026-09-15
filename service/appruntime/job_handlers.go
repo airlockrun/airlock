@@ -119,12 +119,12 @@ func (h *Service) reconcileJobHandlersTx(ctx context.Context, q *dbq.Queries, ag
 	return nil
 }
 
-func (h *Service) preflightJobHandlers(ctx context.Context, agentID uuid.UUID, definitions []wire.JobHandlerDef) ([]wire.JobHandlerDef, error) {
+func preflightJobHandlers(ctx context.Context, q *dbq.Queries, agentID uuid.UUID, definitions []wire.JobHandlerDef) ([]wire.JobHandlerDef, error) {
 	normalized, err := jobssvc.NormalizeHandlerDefinitions(definitions)
 	if err != nil {
 		return nil, err
 	}
-	existing, err := dbq.New(h.db.Pool()).ListJobHandlersByAgent(ctx, toPgUUID(agentID))
+	existing, err := q.ListJobHandlersByAgent(ctx, toPgUUID(agentID))
 	if err != nil {
 		return nil, fmt.Errorf("list existing job handlers: %w", err)
 	}
