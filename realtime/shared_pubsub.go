@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -28,9 +30,10 @@ type storedEvent struct {
 }
 
 type sharedPubSub struct {
-	pool   *pgxpool.Pool
-	hub    *Hub
-	logger *zap.Logger
+	running atomic.Bool
+	pool    *pgxpool.Pool
+	hub     *Hub
+	logger  *zap.Logger
 }
 
 // NewSharedPubSub selects PostgreSQL delivery and replay. Run must run on every
@@ -103,6 +106,10 @@ func (ps *PubSub) Run(ctx context.Context) error {
 		panic("realtime: Run requires shared pubsub")
 	}
 	s := ps.shared
+	if !s.running.CompareAndSwap(false, true) {
+		panic("realtime: shared pubsub relay is already running")
+	}
+	defer s.running.Store(false)
 	var cursor uint64
 	for ctx.Err() == nil {
 		if err := s.listen(ctx, &cursor); err != nil && ctx.Err() == nil {
@@ -117,17 +124,14 @@ func (ps *PubSub) Run(ctx context.Context) error {
 }
 
 func (s *sharedPubSub) listen(ctx context.Context, cursor *uint64) error {
-	conn, err := s.pool.Acquire(ctx)
+	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if _, err := conn.Exec(cleanup, "UNLISTEN airlock_realtime_events"); err != nil {
-			_ = conn.Conn().Close(cleanup)
-		}
-		conn.Release()
+		_ = conn.Close(cleanup)
 	}()
 	if _, err := conn.Exec(ctx, "LISTEN airlock_realtime_events"); err != nil {
 		return err
@@ -177,7 +181,7 @@ func (s *sharedPubSub) listen(ctx context.Context, cursor *uint64) error {
 			}
 		}
 		wait, cancel := context.WithTimeout(ctx, time.Second)
-		_, err = conn.Conn().WaitForNotification(wait)
+		_, err = conn.WaitForNotification(wait)
 		cancel()
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			return err

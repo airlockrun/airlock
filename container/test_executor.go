@@ -9,11 +9,11 @@ import (
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/db/dbq"
 	cerrdefs "github.com/containerd/errdefs"
-	dcontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	dcontainer "github.com/moby/moby/api/types/container"
+	dockerclient "github.com/moby/moby/client"
 	"go.uber.org/zap"
 )
 
@@ -39,24 +39,24 @@ func (m *DockerManager) StartTestJSExecutor(ctx context.Context, buildID uuid.UU
 		return nil, errors.New("test JS executor build credential is inactive")
 	}
 	cfg, host := testJSExecutorConfig(m.cfg.JSExecutorImage, m.cfg.InstanceID, buildID)
-	created, err := m.client.ContainerCreate(ctx, cfg, host, nil, nil, "")
+	created, err := m.client.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: cfg, HostConfig: host})
 	if err != nil {
 		return nil, err
 	}
 	remove := func() error {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := m.client.ContainerRemove(cleanup, created.ID, dcontainer.RemoveOptions{Force: true})
+		_, err := m.client.ContainerRemove(cleanup, created.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return err
 	}
-	attach, err := m.client.ContainerAttach(ctx, created.ID, dcontainer.AttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
+	attach, err := m.client.ContainerAttach(ctx, created.ID, dockerclient.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
 	if err != nil {
 		return nil, errors.Join(err, remove())
 	}
-	if err := m.client.ContainerStart(ctx, created.ID, dcontainer.StartOptions{}); err != nil {
+	if _, err := m.client.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		attach.Close()
 		return nil, errors.Join(err, remove())
 	}
@@ -88,14 +88,14 @@ func testJSExecutorConfig(image, instance string, buildID uuid.UUID) (*dcontaine
 func (m *DockerManager) reapTestJSExecutors() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	items, err := m.client.ContainerList(ctx, dcontainer.ListOptions{All: true, Filters: filters.NewArgs(
-		filters.Arg("label", config.LabelInstance+"="+m.cfg.InstanceID), filters.Arg("label", labelResource+"=test-js-executor"),
+	items, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{All: true, Filters: make(dockerclient.Filters).Add(
+		"label", config.LabelInstance+"="+m.cfg.InstanceID, labelResource+"=test-js-executor",
 	)})
 	if err != nil {
 		m.logger.Warn("list test executors", zap.Error(err))
 		return
 	}
-	for _, item := range items {
+	for _, item := range items.Items {
 		buildID, err := uuid.Parse(item.Labels["run.airlock.build"])
 		if err != nil {
 			m.logger.Error("test executor has invalid build label", zap.String("container_id", item.ID))
@@ -108,7 +108,7 @@ func (m *DockerManager) reapTestJSExecutors() {
 		}
 		locked, err := dbq.New(tx).TryLockBuildTestExecutor(ctx, buildID.String())
 		if err == nil && locked {
-			err = m.client.ContainerRemove(ctx, item.ID, dcontainer.RemoveOptions{Force: true})
+			_, err = m.client.ContainerRemove(ctx, item.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		}
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		if err != nil && !cerrdefs.IsNotFound(err) {

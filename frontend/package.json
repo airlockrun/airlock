@@ -22,7 +22,7 @@
     "@zxcvbn-ts/core": "^4.1.1",
     "@zxcvbn-ts/language-common": "^4.1.1",
     "axios": "^1.18.1",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "marked": "^17.0.0",
     "pinia": "^3.0.0",
     "primeicons": "^7.0.0",
@@ -41,7 +41,7 @@
     "typescript": "~5.9.0",
     "unplugin-vue-components": "^32.0.0",
     "vite": "^8.0.16",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "vue-tsc": "^3.0.0"
   }
 }

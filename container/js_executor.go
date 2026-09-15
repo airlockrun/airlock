@@ -11,12 +11,11 @@ import (
 	"github.com/airlockrun/airlock/config"
 	"github.com/airlockrun/airlock/db/dbq"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
-	dcontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	dcontainer "github.com/moby/moby/api/types/container"
+	dockerclient "github.com/moby/moby/client"
 )
 
 // JSExecutorManager is intentionally separate from reusable app containers.
@@ -58,24 +57,24 @@ func (m *DockerManager) StartJSExecutor(ctx context.Context, runID, token uuid.U
 	}
 	cfg, host := jsExecutorConfig(m.cfg.JSExecutorImage, m.cfg.InstanceID, runID, token)
 	name := m.cfg.InstanceID + "-js-" + runID.String() + "-" + token.String()
-	created, err := m.client.ContainerCreate(ctx, cfg, host, nil, nil, name)
+	created, err := m.client.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: cfg, HostConfig: host, Name: name})
 	if err != nil {
 		return nil, err
 	}
 	remove := func() error {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := m.client.ContainerRemove(cleanup, created.ID, dcontainer.RemoveOptions{Force: true})
+		_, err := m.client.ContainerRemove(cleanup, created.ID, dockerclient.ContainerRemoveOptions{Force: true})
 		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return err
 	}
-	attach, err := m.client.ContainerAttach(ctx, created.ID, dcontainer.AttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
+	attach, err := m.client.ContainerAttach(ctx, created.ID, dockerclient.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
 	if err != nil {
 		return nil, errors.Join(err, remove())
 	}
-	if err := m.client.ContainerStart(ctx, created.ID, dcontainer.StartOptions{}); err != nil {
+	if _, err := m.client.ContainerStart(ctx, created.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		attach.Close()
 		return nil, errors.Join(err, remove())
 	}
@@ -94,7 +93,7 @@ func (m *DockerManager) StartJSExecutor(ctx context.Context, runID, token uuid.U
 }
 
 type jsAttach struct {
-	attach types.HijackedResponse
+	attach dockerclient.ContainerAttachResult
 	reader *io.PipeReader
 	remove func() error
 	once   sync.Once
@@ -115,14 +114,14 @@ func (s *jsAttach) Close() error {
 // ReapJSExecutors only removes this instance's containers whose exact owner
 // lease is no longer live. Another replica's live execution is never reclaimed.
 func (m *DockerManager) ReapJSExecutors(ctx context.Context) error {
-	list, err := m.client.ContainerList(ctx, dcontainer.ListOptions{All: true, Filters: filters.NewArgs(
-		filters.Arg("label", config.LabelInstance+"="+m.cfg.InstanceID), filters.Arg("label", labelResource+"="+jsExecutorResource),
+	list, err := m.client.ContainerList(ctx, dockerclient.ContainerListOptions{All: true, Filters: make(dockerclient.Filters).Add(
+		"label", config.LabelInstance+"="+m.cfg.InstanceID, labelResource+"="+jsExecutorResource,
 	)})
 	if err != nil {
 		return err
 	}
 	q := dbq.New(m.pool)
-	for _, item := range list {
+	for _, item := range list.Items {
 		runID, err := uuid.Parse(item.Labels[jsRunLabel])
 		if err != nil {
 			return err
@@ -138,7 +137,7 @@ func (m *DockerManager) ReapJSExecutors(ctx context.Context) error {
 		if live {
 			continue
 		}
-		if err := m.client.ContainerRemove(ctx, item.ID, dcontainer.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := m.client.ContainerRemove(ctx, item.ID, dockerclient.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			return err
 		}
 	}

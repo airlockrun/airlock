@@ -173,7 +173,7 @@ func (h *Service) Sync(ctx context.Context, req wire.SyncRequest) (wire.SyncResp
 	if err := wire.ValidateAgentDefinitions(req); err != nil {
 		return wire.SyncResponse{}, apperr.Detail(apperr.ErrInvalidInput, "%s", err)
 	}
-	jobHandlers, err := h.preflightJobHandlers(ctx, agentID, req.JobHandlers)
+	jobHandlers, err := preflightJobHandlers(ctx, q, agentID, req.JobHandlers)
 	if err != nil {
 		return wire.SyncResponse{}, jobManifestError(err)
 	}

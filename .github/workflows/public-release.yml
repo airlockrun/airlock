@@ -70,6 +70,22 @@ jobs:
         env:
           GOWORK: off
         run: go run ./cmd/airlockvet ./...
+      - name: Go vulnerabilities
+        env:
+          GOWORK: off
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -format=text -scan=symbol ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Frontend vulnerabilities
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+          test -f package.json
+          test -f pnpm-lock.yaml
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level low
       - uses: docker/setup-buildx-action@v3
       - name: Verify published images and executor smoke
         env:

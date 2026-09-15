@@ -8,4 +8,6 @@ ignoredBuiltDependencies:
 
 overrides:
   esbuild: 0.28.1
-  postcss: 8.5.15
+  postcss: 8.5.23
+  'nanoid@>=3.0.0 <3.3.18': 3.3.18
+  'undici@>=7.0.0 <7.29.0': 7.29.0

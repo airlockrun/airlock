@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/airlockrun/airlock/convert"
 	"github.com/airlockrun/airlock/db/dbq"
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -38,9 +40,10 @@ type jobLoader interface {
 // JobEventRelay fans committed PostgreSQL job notifications out to this
 // replica's local WebSocket subscribers.
 type JobEventRelay struct {
-	pool   *pgxpool.Pool
-	hub    *Hub
-	logger *zap.Logger
+	running atomic.Bool
+	pool    *pgxpool.Pool
+	hub     *Hub
+	logger  *zap.Logger
 }
 
 func NewJobEventRelay(pool *pgxpool.Pool, hub *Hub, logger *zap.Logger) *JobEventRelay {
@@ -58,6 +61,10 @@ func NewJobEventRelay(pool *pgxpool.Pool, hub *Hub, logger *zap.Logger) *JobEven
 
 // Run maintains a dedicated LISTEN connection until ctx is cancelled.
 func (r *JobEventRelay) Run(ctx context.Context) error {
+	if !r.running.CompareAndSwap(false, true) {
+		panic("realtime: job event relay is already running")
+	}
+	defer r.running.Store(false)
 	for {
 		if err := r.listen(ctx); err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 			r.logger.Error("job event listener disconnected", zap.Error(err))
@@ -77,17 +84,14 @@ func (r *JobEventRelay) Run(ctx context.Context) error {
 }
 
 func (r *JobEventRelay) listen(ctx context.Context) error {
-	conn, err := r.pool.Acquire(ctx)
+	conn, err := pgx.ConnectConfig(ctx, r.pool.Config().ConnConfig)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if _, err := conn.Exec(cleanupCtx, "UNLISTEN "+jobEventsChannel); err != nil {
-			_ = conn.Conn().Close(cleanupCtx)
-		}
-		conn.Release()
+		_ = conn.Close(cleanupCtx)
 	}()
 
 	if _, err := conn.Exec(ctx, "LISTEN "+jobEventsChannel); err != nil {
@@ -96,7 +100,7 @@ func (r *JobEventRelay) listen(ctx context.Context) error {
 	r.hub.ResyncAll()
 	queries := dbq.New(conn)
 	for {
-		notification, err := conn.Conn().WaitForNotification(ctx)
+		notification, err := conn.WaitForNotification(ctx)
 		if err != nil {
 			return err
 		}
