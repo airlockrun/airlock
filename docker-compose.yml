@@ -222,7 +222,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-builder
-    image: ghcr.io/airlockrun/airlock-agent-builder:v0.7.0-rc.3
+    image: ghcr.io/airlockrun/airlock-agent-builder:v0.7.0-rc.4
     command: ["true"]
     restart: "no"
 
@@ -230,7 +230,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.agent-base
-    image: ghcr.io/airlockrun/airlock-agent-base:v0.7.0-rc.3
+    image: ghcr.io/airlockrun/airlock-agent-base:v0.7.0-rc.4
     command: ["true"]
     restart: "no"
 
@@ -238,7 +238,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.js-executor
-    image: ${JS_EXECUTOR_IMAGE:-ghcr.io/airlockrun/airlock-js-executor:v0.7.0-rc.3}
+    image: ${JS_EXECUTOR_IMAGE:-ghcr.io/airlockrun/airlock-js-executor:v0.7.0-rc.4}
     entrypoint: ["/usr/local/bin/js-executor-check"]
     command: []
     network_mode: none
@@ -291,7 +291,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airlock
-    image: ghcr.io/airlockrun/airlock:v0.7.0-rc.3
+    image: ghcr.io/airlockrun/airlock:v0.7.0-rc.4
     depends_on:
       # required:false — when a service's profile is inactive (external Postgres
       # via bundled-db off, external S3 via bundled-s3 off) it doesn't start and
@@ -454,7 +454,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    image: ghcr.io/airlockrun/airlock-frontend:v0.7.0-rc.3
+    image: ghcr.io/airlockrun/airlock-frontend:v0.7.0-rc.4
     restart: unless-stopped
 
   caddy:

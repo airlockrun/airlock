@@ -6,8 +6,8 @@ github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c h1:udKWzYgxTojEK
 github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/airlockrun/agentsdk v0.7.0-rc.1 h1:monFf9eLLRNTMsjXyQSPx/YFfYcVzcAOb54RTBe2hag=
-github.com/airlockrun/agentsdk v0.7.0-rc.1/go.mod h1:CDR/cSVAf9/7h1en3BRqqOq+d++qKQbbnH2ENEMt53Y=
+github.com/airlockrun/agentsdk v0.7.0-rc.2 h1:JE6IXsNVCemGx9uNaZ7trJRQ4gaZiVYjacuIm80OZXI=
+github.com/airlockrun/agentsdk v0.7.0-rc.2/go.mod h1:nPmNw7X5Jn6t46mI2QZZD+roh3kaRzP+0OUs61b4c2k=
 github.com/airlockrun/goai v0.1.8 h1:JewCCeGc0P2ikeqmtIBHOgBfMUwyWpU7hFDZ01GL/qs=
 github.com/airlockrun/goai v0.1.8/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
 github.com/airlockrun/sol v0.1.11 h1:zMK1bgkT/EHRBnsSF2gwWISFXtRfuZE5PE2BgQr7ow0=
