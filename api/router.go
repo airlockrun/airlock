@@ -846,6 +846,7 @@ func NewRouter(cfg RouterConfig) *Router {
 
 	r.Route("/api/agent", func(r chi.Router) {
 		r.Use(auth.AgentMiddleware(cfg.JWTSecret, dbq.New(cfg.DB.Pool())))
+		r.Get("/members", ah.ListMembers)
 		r.Post("/agents/{definition}/runs", ah.StartAgent)
 		r.Get("/agents/{definition}/runs", ah.ListAgentRuns)
 		r.Get("/agents/{definition}/runs/{id}", ah.GetAgentRun)
