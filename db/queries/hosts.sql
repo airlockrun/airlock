@@ -197,7 +197,7 @@ INSERT INTO connector_resources (
     artifact_set_id, activation_manifest, activation_manifest_hash, inventory_revision,
     active_provenance, rollback_provenance, active_observation_state, rollback_observation_state
 )
-SELECT @id, @host_id, @owner_principal_id, 'connector-' || replace(@id::text, '-', ''),
+SELECT CAST(@id AS uuid), @host_id, @owner_principal_id, 'connector-' || replace(CAST(CAST(@id AS uuid) AS text), '-', ''),
        artifact_set.kind, artifact_set.contract_id, artifact_set.name, @display_name,
        artifact_set.description, artifact_set.protocol_major, artifact_set.protocol_minor,
        artifact_set.features, artifact_set.artifact_version, artifact_file.digest,
@@ -215,6 +215,11 @@ WHERE artifact_file.id = @artifact_file_id
   AND build.status = 'complete' AND artifact_set.retired_at IS NULL
   AND connector_interface_satisfies_need(artifact_set.interface_descriptor, artifact_set.contract_id, need.spec)
 RETURNING connector_resources.*;
+
+-- name: GetHostContractInstallation :one
+SELECT id FROM connector_resources
+WHERE host_id = @host_id AND contract_id = @contract_id AND contract_id <> ''
+  AND lifecycle = 'active' AND id <> @excluding_id;
 
 -- name: GetHostedConnectorForInventory :one
 SELECT * FROM connector_resources
@@ -351,8 +356,11 @@ USING prepared
 WHERE reservation.connector_id = @connector_id;
 
 -- name: TombstoneConnectorInventory :one
-WITH prepared AS (
+WITH candidate AS MATERIALIZED (
+    SELECT id FROM connector_resources WHERE id = @id FOR UPDATE
+), prepared AS (
     SELECT prepare_connector_parent_deletion('connector', @id, false)
+    FROM candidate
 ), direct_unbound AS (
     UPDATE agent_resource_needs need
     SET bound_connector_id = NULL
@@ -366,6 +374,17 @@ WITH prepared AS (
     DELETE FROM connector_reservations reservation WHERE reservation.connector_id = @id
 ), removed_grants AS (
     DELETE FROM resource_grants grant_row WHERE grant_row.connector_id = @id
+), cancelled_management AS (
+    UPDATE host_management_jobs job
+    SET status = 'cancelled', error_message = 'connector removed', completed_at = now(), updated_at = now()
+    FROM prepared
+    WHERE job.connector_id = @id AND job.status IN ('queued', 'running', 'timed_out')
+    RETURNING job.id
+), fenced_management_attempts AS (
+    UPDATE host_management_attempts attempt
+    SET status = 'failed', error_message = 'connector removed', lease_expires_at = now(), completed_at = now(), updated_at = now()
+    FROM cancelled_management job
+    WHERE attempt.job_id = job.id AND attempt.status IN ('leased', 'running', 'interrupted')
 )
 UPDATE connector_resources connector
 SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector removed by host',
@@ -509,6 +528,17 @@ WITH host_claim_lock AS MATERIALIZED (
     FROM host_management_jobs job
     JOIN host_snapshot host ON host.id = job.host_id
     WHERE job.status IN ('queued', 'running') AND job.deadline_at > now()
+      AND (job.kind = 'connector_remove' OR NOT EXISTS (
+          SELECT 1 FROM host_management_jobs pending_inventory
+          WHERE pending_inventory.connector_id = job.connector_id
+            AND pending_inventory.status = 'succeeded'
+            AND pending_inventory.inventory_revision IS NOT NULL
+            AND pending_inventory.inventory_acknowledged_at IS NULL
+      ))
+      AND (job.kind = 'shell' OR EXISTS (
+          SELECT 1 FROM connector_resources connector
+          WHERE connector.id = job.connector_id AND connector.host_id = job.host_id AND connector.lifecycle = 'active'
+      ))
       AND (host.access_mode = 'full' OR (host.access_mode = 'update_only' AND job.kind IN ('connector_update', 'connector_rollback')))
       AND (job.artifact_file_id IS NULL OR EXISTS (
           SELECT 1 FROM connector_artifact_files artifact_file
@@ -579,13 +609,20 @@ WITH fenced AS (
 SELECT * FROM inserted UNION ALL SELECT * FROM existing LIMIT 1;
 
 -- name: CompleteHostManagementJob :one
-WITH fenced AS (
+WITH connector_lock AS MATERIALIZED (
+    SELECT connector.id, connector.lifecycle
+    FROM connector_resources connector
+    JOIN host_management_jobs job ON job.connector_id = connector.id
+    WHERE job.id = @job_id AND job.host_id = @host_id AND connector.host_id = job.host_id
+    FOR UPDATE OF connector
+), fenced AS (
     SELECT attempt.job_id, attempt.attempt_number
     FROM host_management_attempts attempt
     JOIN host_management_jobs job ON job.id = attempt.job_id
     WHERE attempt.job_id = @job_id AND attempt.attempt_token = @attempt_token
       AND attempt.status IN ('leased', 'running', 'interrupted')
       AND job.host_id = @host_id AND job.status IN ('running', 'timed_out')
+      AND (job.kind = 'shell' OR EXISTS (SELECT 1 FROM connector_lock WHERE lifecycle = 'active'))
       AND NOT EXISTS (SELECT 1 FROM host_management_attempts newer WHERE newer.job_id = attempt.job_id AND newer.attempt_number > attempt.attempt_number)
     FOR UPDATE OF job, attempt
 ), finished_attempt AS (
@@ -605,37 +642,50 @@ WITH fenced AS (
     FROM finished_attempt WHERE job.id = finished_attempt.job_id RETURNING job.*
 ), installed_connector AS (
     UPDATE connector_resources connector
-    SET lifecycle = 'active', readiness = 'starting', readiness_message = 'connector install completed; awaiting host sync',
+    SET readiness = 'starting', readiness_message = 'connector install completed; awaiting host sync',
         artifact_digest = artifact_file.digest, updated_at = now()
     FROM finished
     JOIN connector_artifact_files artifact_file ON artifact_file.id = finished.artifact_file_id
-    WHERE @succeeded::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id
+    WHERE @succeeded::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active'
 ), failed_install AS (
     UPDATE connector_resources connector
-    SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector install failed', artifact_digest = NULL, updated_at = now()
-    FROM finished WHERE NOT @succeeded::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id
+    SET readiness = 'unhealthy', readiness_message = 'connector install failed', updated_at = now()
+    FROM finished WHERE NOT @succeeded::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active'
 )
 SELECT * FROM finished;
 
 -- name: FailExpiredHostManagementJobs :execrows
-WITH expired AS (
-    SELECT id FROM host_management_jobs
-    WHERE status IN ('queued', 'running') AND deadline_at <= now()
-    ORDER BY deadline_at, id FOR UPDATE SKIP LOCKED LIMIT LEAST(@lim::integer, 100)
+WITH connector_locks AS MATERIALIZED (
+    SELECT connector.id FROM connector_resources connector
+    WHERE EXISTS (
+        SELECT 1 FROM host_management_jobs job
+        WHERE job.connector_id = connector.id AND job.kind = 'connector_install'
+          AND job.status IN ('queued', 'running') AND job.deadline_at <= now()
+    )
+    ORDER BY connector.id FOR UPDATE SKIP LOCKED LIMIT LEAST(@lim::integer, 100)
+), expired AS (
+    SELECT job.id FROM host_management_jobs job
+    WHERE job.status IN ('queued', 'running') AND job.deadline_at <= now()
+      AND (job.kind <> 'connector_install' OR job.connector_id IS NULL
+           OR job.connector_id IN (SELECT id FROM connector_locks))
+    ORDER BY job.deadline_at, job.id FOR UPDATE OF job SKIP LOCKED LIMIT LEAST(@lim::integer, 100)
 ), finished AS (
 UPDATE host_management_jobs job
 SET status = 'timed_out', error_message = 'host management deadline exceeded', completed_at = now(), updated_at = now()
 FROM expired WHERE job.id = expired.id RETURNING job.*
 )
 UPDATE connector_resources connector
-SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector install timed out', artifact_digest = NULL, updated_at = now()
-FROM finished WHERE finished.kind = 'connector_install' AND connector.id = finished.connector_id;
+SET readiness = 'unhealthy', readiness_message = 'connector install timed out', updated_at = now()
+FROM finished WHERE finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active';
 
 -- name: DeleteRetainedHostManagementJobs :execrows
 WITH retained AS (
     SELECT id FROM host_management_jobs
     WHERE status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
       AND completed_at <= now() - interval '30 days'
+      AND (inventory_revision IS NULL OR inventory_acknowledged_at IS NOT NULL OR EXISTS (
+          SELECT 1 FROM connector_resources connector WHERE connector.id = host_management_jobs.connector_id AND connector.lifecycle = 'revoked'
+      ))
     ORDER BY completed_at, id FOR UPDATE SKIP LOCKED LIMIT LEAST(@lim::integer, 100)
 )
 DELETE FROM host_management_jobs job USING retained WHERE job.id = retained.id;
@@ -653,6 +703,46 @@ WITH candidate AS (
       AND need.deleted_at IS NULL AND connector.lifecycle = 'active' AND connector.readiness = 'ready'
       AND (need.bound_connector_id = job.connector_id OR job.orchestration_id IS NOT NULL)
       AND connector_interface_satisfies_need(connector.interface_descriptor, connector.contract_id, need.spec)
+      AND ((job.operation_kind = 'command' AND (
+          EXISTS (
+              SELECT 1 FROM jsonb_array_elements(need.spec->'commands') AS required_op(value)
+              WHERE required_op.value->>'name' = job.operation_name
+                AND (required_op.value->>'revision')::integer = job.operation_revision
+                AND required_op.value->>'mode' = job.mode
+                AND required_op.value->>'inputSchemaHash' = job.input_schema_hash
+                AND required_op.value->>'outputSchemaHash' = job.output_schema_hash
+          )
+          AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(connector.interface_descriptor->'commands') AS provided_op(value)
+              WHERE provided_op.value->>'name' = job.operation_name
+                AND (provided_op.value->>'revision')::integer = job.operation_revision
+                AND provided_op.value->>'mode' = job.mode
+                AND provided_op.value->>'inputSchemaHash' = job.input_schema_hash
+                AND provided_op.value->>'outputSchemaHash' = job.output_schema_hash
+          )
+      )) OR (job.operation_kind <> 'command' AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(need.spec->'directories') AS required_dir(value)
+          JOIN LATERAL (
+              SELECT provided.value
+              FROM jsonb_array_elements(connector.interface_descriptor->'directories') AS provided(value)
+              WHERE provided.value->>'name' = required_dir.value->>'name'
+                AND (provided.value->>'revision')::integer = job.operation_revision
+          ) provided_dir ON true
+          WHERE required_dir.value->>'name' = job.operation_name
+            AND (required_dir.value->>'revision')::integer = job.operation_revision
+            AND CASE job.operation_kind
+                WHEN 'directory_list' THEN coalesce((required_dir.value->>'list')::boolean, false) AND coalesce((provided_dir.value->>'list')::boolean, false)
+                WHEN 'directory_stat' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_read' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_export' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_write' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_delete' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_move' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_import' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                ELSE false
+            END
+      )))
       AND NOT EXISTS (
           SELECT 1 FROM connector_job_attempts attempt
           WHERE attempt.job_id = job.id AND attempt.status IN ('leased', 'running') AND attempt.lease_expires_at > now()
@@ -670,6 +760,19 @@ WITH candidate AS (
 )
 SELECT numbered.*, attempt.attempt_number, attempt.attempt_token, attempt.lease_expires_at
 FROM numbered JOIN attempt ON attempt.job_id = numbered.id;
+
+-- name: LockHostDispatch :exec
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(host_id)::uuid::text, 1751348322));
+
+-- name: CountHostConnectorAttempts :one
+SELECT count(*) FROM connector_job_attempts attempt
+JOIN connector_jobs job ON job.id = attempt.job_id
+JOIN connector_resources connector ON connector.id = job.connector_id
+WHERE connector.host_id = @host_id AND attempt.status IN ('leased', 'running') AND attempt.lease_expires_at > now();
+
+-- name: HeartbeatHost :execrows
+UPDATE hosts SET last_seen_at = now(), access_mode = @access_mode, updated_at = now()
+WHERE id = @id AND lifecycle = 'active';
 
 -- name: RenewConnectorJobAttemptForHost :execrows
 UPDATE connector_job_attempts attempt

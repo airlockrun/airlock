@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/airlock/container"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/db/notifications"
 	"github.com/airlockrun/airlock/hostapi"
 	"github.com/airlockrun/airlock/networkpolicy"
 	"github.com/airlockrun/airlock/oauth"
@@ -140,19 +141,22 @@ type RouterConfig struct {
 // PubSub, containers or logger. Other producers (bridges/builders) must also stop.
 type Router struct {
 	http.Handler
+	hostProtocol  *hostapi.Handler
 	chat          *chatsvc.Service
 	conversations *conversationsHandler
 	stopAgentRuns context.CancelFunc
 	agentRunsDone chan struct{}
+	notifications *notifications.Relay
 }
 
 // Shutdown stops chat admission, interrupts hosted runtimes without revoking
 // credentials or cancelling durable jobs, and waits for settlement and publishers.
 // On a deadline error, keep dependencies alive or exit for DB-lease recovery.
 func (r *Router) Shutdown(ctx context.Context) error {
+	hostErr := r.hostProtocol.Shutdown(ctx)
 	r.stopAgentRuns()
 	drained := r.conversations.stopForwarding()
-	err := r.chat.Shutdown(ctx)
+	err := errors.Join(hostErr, r.notifications.Shutdown(ctx), r.chat.Shutdown(ctx))
 	select {
 	case <-r.agentRunsDone:
 	case <-ctx.Done():
@@ -215,11 +219,13 @@ func NewRouter(cfg RouterConfig) *Router {
 	needsHandler := NewNeedsHandler(needssvc.NewService(cfg.DB, cfg.Dispatcher.RefreshAgent, cfg.Logger.Named("needs")))
 	connectorsService := connectorssvc.New(cfg.DB, cfg.Logger.Named("connectors"))
 	resourcesHandler := NewResourcesHandler(resourcessvc.New(cfg.DB, connectorsService, cfg.Logger.Named("resources")))
-	connectorJobsService := connectorjobssvc.New(cfg.DB, cfg.Logger.Named("connector-jobs"))
+	owned.notifications = notifications.New(context.Background(), cfg.DB.Pool(), cfg.Logger.Named("work-notifications"))
+	connectorJobsService := connectorjobssvc.New(cfg.DB, owned.notifications, cfg.Logger.Named("connector-jobs"))
 	connectorOrchestrationService := connectororchestrationsvc.New(cfg.DB, cfg.Logger.Named("connector-orchestration"))
-	hostsService := hostssvc.New(cfg.DB, cfg.PublicURL, cfg.ConnectorStorageOrigins, cfg.S3Client, connectorJobsService, cfg.Secrets, cfg.Logger.Named("hosts"))
+	hostsService := hostssvc.New(cfg.DB, cfg.PublicURL, cfg.ConnectorStorageOrigins, cfg.S3Client, connectorJobsService, cfg.Secrets, owned.notifications, cfg.Logger.Named("hosts"))
 	hostsHandler := newHostsHandler(hostsService)
 	hostProtocol := hostapi.New(hostsService, connectorOrchestrationService, cfg.Logger.Named("host-api"))
+	owned.hostProtocol = hostProtocol
 	fileService := agentstoragesvc.New(cfg.DB)
 	connectorDirectoriesService := connectordirectoriessvc.New(cfg.DB, connectorJobsService, fileService, cfg.S3Client)
 	connectorsHandler := newConnectorsHandler(connectorsService, connectorOrchestrationService)
@@ -320,13 +326,7 @@ func NewRouter(cfg RouterConfig) *Router {
 	r.Route("/api/hosts/v1", func(r chi.Router) {
 		r.Post("/enroll/device-code", hostProtocol.Begin)
 		r.Post("/enroll/complete", hostProtocol.CompleteEnrollment)
-		r.Post("/sync", hostProtocol.Sync)
-		r.Post("/connectors/inventory", hostProtocol.ConnectorInventory)
-		r.Post("/work/poll", hostProtocol.Poll)
-		r.Post("/management/{jobID}/events", hostProtocol.ManagementEvent)
-		r.Post("/management/{jobID}/complete", hostProtocol.ManagementComplete)
-		r.Post("/connectors/{connectorID}/jobs/{jobID}/events", hostProtocol.ConnectorEvent)
-		r.Post("/connectors/{connectorID}/jobs/{jobID}/complete", hostProtocol.ConnectorComplete)
+		r.Get("/connect", hostProtocol.Connect)
 	})
 
 	// OAuth Authorization Server handler — built once and reused by

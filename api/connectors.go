@@ -239,6 +239,7 @@ func connectorToProto(resource connectorssvc.Resource) *airlockv1.ConnectorInfo 
 		Online: row.Lifecycle == "active" && row.Readiness != "offline",
 	}
 	if canManage {
+		info.HostId = convert.PgUUIDToString(row.HostID)
 		info.OwnerPrincipalId = uuid.UUID(row.OwnerPrincipalID.Bytes).String()
 		info.OwnerName, info.OwnerKind = resource.OwnerName, resource.OwnerKind
 	}
@@ -263,7 +264,8 @@ func connectorToProto(resource connectorssvc.Resource) *airlockv1.ConnectorInfo 
 		}
 	}
 	return &airlockv1.ConnectorInfo{
-		Id: uuid.UUID(row.ID.Bytes).String(), OwnerPrincipalId: uuid.UUID(row.OwnerPrincipalID.Bytes).String(), Slug: row.Slug,
+		HostId: convert.PgUUIDToString(row.HostID),
+		Id:     uuid.UUID(row.ID.Bytes).String(), OwnerPrincipalId: uuid.UUID(row.OwnerPrincipalID.Bytes).String(), Slug: row.Slug,
 		Kind: row.Kind.String, ContractId: row.ContractID.String, Name: row.Name.String, DisplayName: row.DisplayName,
 		Description: row.Description.String, ProtocolMajor: row.ProtocolMajor.Int32, ProtocolMinor: row.ProtocolMinor.Int32,
 		Features: row.Features, ArtifactVersion: row.ArtifactVersion.String, ArtifactDigest: row.ArtifactDigest.String,

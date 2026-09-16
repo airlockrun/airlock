@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
-import type { HostInfo } from '@/gen/airlock/v1/types_pb'
+import type { ConnectorInfo, HostInfo } from '@/gen/airlock/v1/types_pb'
 import { ConnectorArtifactValidationError, listConnectorArtifacts } from '@/api/connectors'
-import { listHosts, requestInstall } from '@/api/hosts'
+import { getHost, listHosts, requestInstall } from '@/api/hosts'
 import { useNow } from '@/composables/useNow'
 import { useAirlockI18n } from '@/i18n'
 import { hasCapability } from '@/utils/resources'
@@ -35,9 +36,11 @@ interface HostChoice {
   version?: ConnectorArtifactVersion
   target?: ConnectorArtifactTarget
   reason: string
+  existing?: ConnectorInfo
 }
 
 const hosts = ref<HostInfo[]>([])
+const installations = ref<ConnectorInfo[]>([])
 const catalog = ref<ConnectorArtifactCatalog | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -52,14 +55,22 @@ const choices = computed<HostChoice[]>(() => hosts.value.map((host) => {
   const version = catalog.value?.versions.find((item) => item.compatible && item.targets.some((target) => target.target === platform))
   const target = version?.targets.find((item) => item.target === platform)
   let reason = ''
+  const existing = installations.value.find((connector) => connector.hostId === host.id
+    && connector.lifecycle === 'active' && !!connector.contractId
+    && connector.contractId === version?.interface.contractId)
   if (!hasCapability(host.capabilities, 'manage')) reason = t('connectors.install.host.manageRequired')
+  else if (existing) reason = t(existing.activeObservationState === 'pending'
+    ? 'connectors.install.host.unconfirmed'
+    : existing.readiness !== 'ready'
+      ? 'connectors.install.host.needsAttention'
+      : 'connectors.install.host.existing', { name: existing.displayName })
   else if (host.accessMode !== 'full') reason = host.accessMode === 'update_only'
     ? t('connectors.install.host.updatesOnly')
     : t('connectors.install.host.managementDisabled')
   else if (isHostStale(host.lastSeenAt, now.value)) reason = t('connectors.install.host.stale')
   else if (!target) reason = t('connectors.install.host.noArtifact', { platform })
   else if (version?.settings.some((setting) => !setting.jsonName)) reason = t('connectors.install.host.rebuildForSettings')
-  return { host, version, target, reason }
+  return { host, version, target, reason, existing }
 }))
 const selectedChoice = computed(() => choices.value.find((choice) => choice.host.id === selectedHostId.value))
 const selectedSettings = computed(() => selectedChoice.value?.version?.settings ?? [])
@@ -96,8 +107,10 @@ async function load(): Promise<void> {
       listHosts(),
       listConnectorArtifacts(props.agentId, props.connectorNeed.slug),
     ])
+    const details = await Promise.all(loadedHosts.filter((host) => hasCapability(host.capabilities, 'manage')).map((host) => getHost(host.id)))
     if (sequence !== loadSequence) return
     hosts.value = loadedHosts
+    installations.value = details.flatMap((detail) => detail.connectors)
     catalog.value = loadedCatalog
     displayName.value = loadedCatalog.name || props.connectorNeed.slug
   } catch (cause: unknown) {
@@ -191,26 +204,29 @@ async function install(): Promise<void> {
         {{ t('connectors.install.host.noneAvailable') }}
       </Message>
       <div v-else class="host-list" role="radiogroup" :aria-label="t('connectors.install.host.selectionLabel')">
-        <button
-          v-for="choice in choices"
-          :key="choice.host.id"
-          type="button"
-          class="host-choice"
-          :class="{ selected: selectedHostId === choice.host.id }"
-          :disabled="!!choice.reason"
-          :aria-checked="selectedHostId === choice.host.id"
-          role="radio"
-          @click="selectedHostId = choice.host.id"
-        >
-          <span class="host-icon"><i class="pi pi-server" /></span>
-          <span class="host-summary">
-            <strong>{{ choice.host.name }}</strong>
-            <small>{{ choice.host.platform }} / {{ choice.host.architecture }} · {{ connectorCount(choice.host.connectorCount) }}</small>
-            <small v-if="choice.reason" class="unavailable">{{ choice.reason }}</small>
-            <small v-else>{{ choice.version?.version }} · {{ choice.target?.filename }}</small>
-          </span>
-          <i :class="selectedHostId === choice.host.id ? 'pi pi-check-circle' : 'pi pi-circle'" />
-        </button>
+        <div v-for="choice in choices" :key="choice.host.id" class="host-option">
+          <button
+            type="button"
+            class="host-choice"
+            :class="{ selected: selectedHostId === choice.host.id }"
+            :disabled="!!choice.reason"
+            :aria-checked="selectedHostId === choice.host.id"
+            role="radio"
+            @click="selectedHostId = choice.host.id"
+          >
+            <span class="host-icon"><i class="pi pi-server" /></span>
+            <span class="host-summary">
+              <strong>{{ choice.host.name }}</strong>
+              <small>{{ choice.host.platform }} / {{ choice.host.architecture }} · {{ connectorCount(choice.host.connectorCount) }}</small>
+              <small v-if="choice.reason" class="unavailable">{{ choice.reason }}</small>
+              <small v-else>{{ choice.version?.version }} · {{ choice.target?.filename }}</small>
+            </span>
+            <i :class="selectedHostId === choice.host.id ? 'pi pi-check-circle' : 'pi pi-circle'" />
+          </button>
+          <RouterLink v-if="choice.existing" :to="`/settings/hosts/${choice.host.id}`" class="host-details">
+            {{ t('connectors.install.host.details') }}
+          </RouterLink>
+        </div>
       </div>
 
       <template v-if="selectedChoice">
@@ -283,6 +299,7 @@ async function install(): Promise<void> {
 .install-body h3 { margin: 0 0 0.3rem; }
 .muted, .field small, .host-summary small { color: var(--p-text-muted-color); }
 .host-list, .skeletons { gap: 0.55rem; }
+.host-details { display: inline-block; margin: 0.4rem 0 0.25rem; }
 .host-choice { width: 100%; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.75rem; padding: 0.85rem; border: 1px solid var(--p-content-border-color); border-radius: 0.65rem; background: var(--p-content-background); color: inherit; text-align: left; cursor: pointer; }
 .host-choice:not(:disabled):hover, .host-choice.selected { border-color: var(--p-primary-color); background: var(--p-primary-50); }
 .host-choice:disabled { cursor: not-allowed; opacity: 0.68; }

@@ -1,6 +1,22 @@
 import { defineMessages } from './define'
 
 export const connectorMessages = defineMessages({
+  'connectors.install.host.existing': {
+    defaultMessage: '{name} already occupies this contract on this host. Use the existing connector or choose Update in its details. Remove it on the host before reinstalling.',
+    description: 'Explains why a duplicate connector installation is unavailable, including offline and failed installations.',
+  },
+  'connectors.install.host.unconfirmed': {
+    defaultMessage: '{name} reserves this contract, but installation on the host is not confirmed. Check the host management jobs. If installation failed or timed out, request removal and wait for host confirmation before reinstalling.',
+    description: 'Recovery guidance for an installation reserved by Airlock without confirmed host inventory.',
+  },
+  'connectors.install.host.needsAttention': {
+    defaultMessage: '{name} already occupies this contract and is not ready. Inspect its status on the host before choosing recovery. To reinstall, request removal and wait for host confirmation.',
+    description: 'Recovery guidance for an existing offline, starting, or unhealthy connector.',
+  },
+  'connectors.install.host.details': {
+    defaultMessage: 'Open host details and management jobs',
+    description: 'Link to inspect the existing installation and its management history.',
+  },
   'connectors.common.retry': {
     defaultMessage: 'Retry',
     description: 'Button label for retrying a failed connector request.',

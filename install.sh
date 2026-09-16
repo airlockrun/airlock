@@ -36,7 +36,7 @@
 # mutating commands are guarded with explicit `|| die`.
 set -uo pipefail
 
-RELEASE_TAG="${AIRLOCK_TAG:-v0.7.0-rc.4}"
+RELEASE_TAG="${AIRLOCK_TAG:-v0.7.0-rc.5}"
 REPO_URL="https://github.com/airlockrun/airlock.git"
 INSTALL_DIR=""
 TLS_MODE=""        # local|wildcard|tunnel|manual|proxy — decided interactively
