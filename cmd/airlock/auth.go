@@ -4,7 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net/mail"
 	"os"
+	"strings"
 
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db"
@@ -14,7 +17,7 @@ import (
 
 func runAuth(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "airlock auth: missing subcommand (try: airlock auth unlock <email> | airlock auth reset <email>)")
+		fmt.Fprintln(os.Stderr, "airlock auth: missing subcommand (try: airlock auth unlock <email> | airlock auth reset <email> | airlock auth provision --admin <email>)")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -22,10 +25,145 @@ func runAuth(args []string) {
 		runAuthUnlock(args[1:])
 	case "reset":
 		runAuthReset(args[1:])
+	case "provision":
+		runAuthProvision(args[1:])
+	case "set-password":
+		runAuthSetPassword(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "airlock auth: unknown subcommand %q\n", args[0])
 		os.Exit(2)
 	}
+}
+
+// runAuthSetPassword updates a known user's password from stdin. Keeping the
+// value on stdin makes the host-only recovery path usable without putting a
+// credential in an argv list, a shell history entry, or a service log.
+func runAuthSetPassword(args []string) {
+	fs := flag.NewFlagSet("auth set-password", flag.ExitOnError)
+	stdin := fs.Bool("stdin", false, "read one password from standard input (required)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: airlock auth set-password --stdin <email>")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if !*stdin || fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	email := strings.TrimSpace(fs.Arg(0))
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email {
+		fmt.Fprintln(os.Stderr, "airlock auth set-password: a single valid email address is required")
+		os.Exit(2)
+	}
+
+	// A password is a single line. Bound the input before hashing so a bad
+	// pipe cannot consume unbounded memory in this host recovery command.
+	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4097))
+	if err != nil || len(raw) == 0 || len(raw) > 4096 {
+		fmt.Fprintln(os.Stderr, "airlock auth set-password: read one non-empty password from stdin")
+		os.Exit(2)
+	}
+	password := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if password == "" || strings.ContainsAny(password, "\r\n") {
+		fmt.Fprintln(os.Stderr, "airlock auth set-password: password must be one non-empty line")
+		os.Exit(2)
+	}
+	if err := auth.ValidatePasswordStrength(password, []string{email, strings.SplitN(email, "@", 2)[0]}); err != nil {
+		fmt.Fprintf(os.Stderr, "airlock auth set-password: %v\n", err)
+		os.Exit(2)
+	}
+
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		fmt.Fprintln(os.Stderr, "airlock auth set-password: DATABASE_URL is not set")
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	database := db.New(ctx, dbURL)
+	defer database.Close()
+	q := dbq.New(database.Pool())
+	user, err := q.GetUserByEmail(ctx, email)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "airlock auth set-password: no user with email %q\n", email)
+		os.Exit(1)
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hash password: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := q.UpdateUserPasswordAndRevokeSessions(ctx, dbq.UpdateUserPasswordAndRevokeSessionsParams{
+		PasswordHash: pgtype.Text{String: hash, Valid: true},
+		ID:           user.ID,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "airlock auth set-password: update password: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, "Password updated.")
+}
+
+// runAuthProvision creates a host-authorized administrator with a one-time
+// temporary password. It is deliberately separate from the authenticated
+// users API: this is a break-glass recovery path for an owner who no longer
+// has an administrator session. The password is printed only to stdout so an
+// operator can route it through an appropriate secret-safe channel.
+func runAuthProvision(args []string) {
+	fs := flag.NewFlagSet("auth provision", flag.ExitOnError)
+	admin := fs.Bool("admin", false, "create an administrator (required)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: airlock auth provision --admin <email>")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if !*admin || fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	email := strings.TrimSpace(fs.Arg(0))
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email {
+		fmt.Fprintln(os.Stderr, "airlock auth provision: a single valid email address is required")
+		os.Exit(2)
+	}
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		fmt.Fprintln(os.Stderr, "airlock auth provision: DATABASE_URL is not set")
+		os.Exit(1)
+	}
+
+	temp, err := auth.GenerateTempPassword()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate temp password: %v\n", err)
+		os.Exit(1)
+	}
+	hash, err := auth.HashPassword(temp)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hash password: %v\n", err)
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	database := db.New(ctx, dbURL)
+	defer database.Close()
+	_, err = dbq.New(database.Pool()).CreateUser(ctx, dbq.CreateUserParams{
+		Email:              email,
+		DisplayName:        strings.SplitN(email, "@", 2)[0],
+		PasswordHash:       pgtype.Text{String: hash, Valid: true},
+		TenantRole:         "admin",
+		MustChangePassword: true,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "airlock auth provision: create administrator: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Temporary password for %s:\n\n    %s\n\nLog in with it once; you'll be required to set a new password or register a passkey.\n", email, temp)
 }
 
 // runAuthReset sets a one-time temporary password for any user and prints it to
