@@ -143,6 +143,17 @@ WITH candidate AS (
     DELETE FROM resource_grants grant_row
     USING candidate
     WHERE grant_row.connector_id = candidate.id
+), cancelled_management AS (
+    UPDATE host_management_jobs job
+    SET status = 'cancelled', error_message = 'connector removed', completed_at = now(), updated_at = now()
+    FROM candidate
+    WHERE job.connector_id = candidate.id AND job.status IN ('queued', 'running', 'timed_out')
+    RETURNING job.id
+), fenced_management_attempts AS (
+    UPDATE host_management_attempts attempt
+    SET status = 'failed', error_message = 'connector removed', lease_expires_at = now(), completed_at = now(), updated_at = now()
+    FROM cancelled_management job
+    WHERE attempt.job_id = job.id AND attempt.status IN ('leased', 'running', 'interrupted')
 ), cancelled_jobs AS (
     UPDATE connector_jobs job
     SET status = CASE WHEN job.status IN ('held', 'queued') THEN 'cancelled' ELSE job.status END,

@@ -634,17 +634,18 @@ type ConnectorJob struct {
 }
 
 type ConnectorJobAttempt struct {
-	JobID          pgtype.UUID        `json:"job_id"`
-	AttemptNumber  int32              `json:"attempt_number"`
-	AttemptToken   pgtype.UUID        `json:"attempt_token"`
-	Status         string             `json:"status"`
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	LeasedAt       pgtype.Timestamptz `json:"leased_at"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
-	ErrorMessage   pgtype.Text        `json:"error_message"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	JobID             pgtype.UUID        `json:"job_id"`
+	AttemptNumber     int32              `json:"attempt_number"`
+	AttemptToken      pgtype.UUID        `json:"attempt_token"`
+	Status            string             `json:"status"`
+	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
+	LeasedAt          pgtype.Timestamptz `json:"leased_at"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+	ErrorMessage      pgtype.Text        `json:"error_message"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CompletionReceipt []byte             `json:"completion_receipt"`
 }
 
 type ConnectorJobEvent struct {
@@ -951,23 +952,25 @@ type HostManagementEvent struct {
 }
 
 type HostManagementJob struct {
-	ID                pgtype.UUID        `json:"id"`
-	HostID            pgtype.UUID        `json:"host_id"`
-	ConnectorID       pgtype.UUID        `json:"connector_id"`
-	RequestedByUserID pgtype.UUID        `json:"requested_by_user_id"`
-	Kind              string             `json:"kind"`
-	ArtifactFileID    pgtype.UUID        `json:"artifact_file_id"`
-	InputPayload      []byte             `json:"input_payload"`
-	SecretInput       string             `json:"secret_input"`
-	Status            string             `json:"status"`
-	OutputPayload     []byte             `json:"output_payload"`
-	SecretOutput      pgtype.Text        `json:"secret_output"`
-	ErrorMessage      pgtype.Text        `json:"error_message"`
-	DeadlineAt        pgtype.Timestamptz `json:"deadline_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                      pgtype.UUID        `json:"id"`
+	HostID                  pgtype.UUID        `json:"host_id"`
+	ConnectorID             pgtype.UUID        `json:"connector_id"`
+	RequestedByUserID       pgtype.UUID        `json:"requested_by_user_id"`
+	Kind                    string             `json:"kind"`
+	ArtifactFileID          pgtype.UUID        `json:"artifact_file_id"`
+	InputPayload            []byte             `json:"input_payload"`
+	SecretInput             string             `json:"secret_input"`
+	Status                  string             `json:"status"`
+	OutputPayload           []byte             `json:"output_payload"`
+	SecretOutput            pgtype.Text        `json:"secret_output"`
+	ErrorMessage            pgtype.Text        `json:"error_message"`
+	DeadlineAt              pgtype.Timestamptz `json:"deadline_at"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	CompletedAt             pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	InventoryRevision       pgtype.Int8        `json:"inventory_revision"`
+	InventoryAcknowledgedAt pgtype.Timestamptz `json:"inventory_acknowledged_at"`
 }
 
 type IdentityLinkChallenge struct {

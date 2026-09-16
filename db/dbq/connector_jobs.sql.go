@@ -187,113 +187,6 @@ func (q *Queries) CancelConnectorJob(ctx context.Context, arg CancelConnectorJob
 	return i, err
 }
 
-const claimConnectorJob = `-- name: ClaimConnectorJob :one
-WITH candidate AS (
-    SELECT job.id
-    FROM connector_jobs job
-    JOIN connector_resources connector ON connector.id = job.connector_id
-    JOIN agent_resource_needs need ON need.id = job.need_id
-    WHERE job.connector_id = $2
-      AND job.status IN ('queued', 'running')
-      AND job.cancel_requested_at IS NULL
-      AND job.deadline_at > now()
-      AND need.deleted_at IS NULL
-      AND connector.lifecycle = 'active'
-      AND connector.readiness = 'ready'
-      AND (need.bound_connector_id = job.connector_id OR job.orchestration_id IS NOT NULL)
-      AND connector_interface_satisfies_need(connector.interface_descriptor, connector.contract_id, need.spec)
-       AND ((job.operation_kind = 'command' AND (
-          EXISTS (
-              SELECT 1 FROM jsonb_array_elements(need.spec->'commands') AS required_op(value)
-              WHERE required_op.value->>'name' = job.operation_name
-                AND (required_op.value->>'revision')::integer = job.operation_revision
-                AND required_op.value->>'mode' = job.mode
-                AND required_op.value->>'inputSchemaHash' = job.input_schema_hash
-                AND required_op.value->>'outputSchemaHash' = job.output_schema_hash
-          )
-          AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements(connector.interface_descriptor->'commands') AS provided_op(value)
-              WHERE provided_op.value->>'name' = job.operation_name
-                AND (provided_op.value->>'revision')::integer = job.operation_revision
-                AND provided_op.value->>'mode' = job.mode
-                AND provided_op.value->>'inputSchemaHash' = job.input_schema_hash
-                AND provided_op.value->>'outputSchemaHash' = job.output_schema_hash
-          )
-       )) OR (job.operation_kind <> 'command' AND EXISTS (
-           SELECT 1
-           FROM jsonb_array_elements(need.spec->'directories') AS required_dir(value)
-           JOIN LATERAL (
-               SELECT provided.value
-               FROM jsonb_array_elements(connector.interface_descriptor->'directories') AS provided(value)
-               WHERE provided.value->>'name' = required_dir.value->>'name'
-                 AND (provided.value->>'revision')::integer = job.operation_revision
-           ) provided_dir ON true
-           WHERE required_dir.value->>'name' = job.operation_name
-             AND (required_dir.value->>'revision')::integer = job.operation_revision
-             AND CASE job.operation_kind
-                 WHEN 'directory_list' THEN coalesce((required_dir.value->>'list')::boolean, false) AND coalesce((provided_dir.value->>'list')::boolean, false)
-                 WHEN 'directory_stat' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
-                 WHEN 'directory_read' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
-                 WHEN 'directory_export' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
-                 WHEN 'directory_write' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
-                 WHEN 'directory_delete' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
-                 WHEN 'directory_move' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
-                 WHEN 'directory_import' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
-                 ELSE false
-             END
-       )))
-      AND NOT EXISTS (
-          SELECT 1 FROM connector_job_attempts attempt
-          WHERE attempt.job_id = job.id
-            AND attempt.status IN ('leased', 'running')
-             AND attempt.lease_expires_at > now()
-      )
-    ORDER BY job.created_at, job.id
-    FOR UPDATE OF job SKIP LOCKED
-    LIMIT 1
-), claimed AS (
-    UPDATE connector_jobs job
-    SET status = 'running', started_at = coalesce(started_at, now()), updated_at = now()
-    FROM candidate
-    WHERE job.id = candidate.id
-    RETURNING job.id, job.connector_id, job.agent_id, job.need_id, job.request_id, job.orchestration_id, job.target_position, job.canary_cohort, job.operation_kind, job.operation_name, job.operation_revision, job.mode, job.input_schema_hash, job.output_schema_hash, job.input_payload, job.status, job.idempotency_key, job.cancel_requested_at, job.deadline_at, job.output_payload, job.error_code, job.error_message, job.started_at, job.completed_at, job.created_at, job.updated_at, job.request_hash
-), numbered AS (
-    SELECT claimed.id, claimed.connector_id, claimed.agent_id, claimed.need_id, claimed.request_id, claimed.orchestration_id, claimed.target_position, claimed.canary_cohort, claimed.operation_kind, claimed.operation_name, claimed.operation_revision, claimed.mode, claimed.input_schema_hash, claimed.output_schema_hash, claimed.input_payload, claimed.status, claimed.idempotency_key, claimed.cancel_requested_at, claimed.deadline_at, claimed.output_payload, claimed.error_code, claimed.error_message, claimed.started_at, claimed.completed_at, claimed.created_at, claimed.updated_at, claimed.request_hash, coalesce((SELECT max(attempt_number) FROM connector_job_attempts WHERE job_id = claimed.id), 0) + 1 AS attempt_number
-    FROM claimed
-)
-INSERT INTO connector_job_attempts (
-    job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at
-)
-SELECT id, attempt_number, gen_random_uuid(), 'leased',
-       now() + make_interval(secs => $1::integer), now()
-FROM numbered
-RETURNING job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at, completed_at, error_message, created_at, updated_at
-`
-
-type ClaimConnectorJobParams struct {
-	LeaseSeconds int32       `json:"lease_seconds"`
-	ConnectorID  pgtype.UUID `json:"connector_id"`
-}
-
-func (q *Queries) ClaimConnectorJob(ctx context.Context, arg ClaimConnectorJobParams) (ConnectorJobAttempt, error) {
-	row := q.db.QueryRow(ctx, claimConnectorJob, arg.LeaseSeconds, arg.ConnectorID)
-	var i ConnectorJobAttempt
-	err := row.Scan(
-		&i.JobID,
-		&i.AttemptNumber,
-		&i.AttemptToken,
-		&i.Status,
-		&i.LeaseExpiresAt,
-		&i.LeasedAt,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.ErrorMessage,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const completeConnectorJob = `-- name: CompleteConnectorJob :one
 WITH fenced AS (
     SELECT attempt.job_id, attempt.attempt_number
@@ -315,6 +208,7 @@ WITH fenced AS (
     UPDATE connector_job_attempts attempt
     SET status = CASE WHEN $1::boolean THEN 'succeeded' ELSE 'failed' END,
         error_message = CASE WHEN $1::boolean THEN NULL ELSE $4::text END,
+		completion_receipt = jsonb_build_object('succeeded', $1::boolean, 'output', $2::jsonb, 'code', $3::text, 'error', $4::text),
         completed_at = now(), updated_at = now()
     FROM fenced
     WHERE attempt.job_id = fenced.job_id AND attempt.attempt_number = fenced.attempt_number
@@ -441,7 +335,7 @@ SET status = 'interrupted', error_message = 'delivery lease expired',
     completed_at = now(), updated_at = now()
 FROM expired
 WHERE attempt.job_id = expired.job_id AND attempt.attempt_number = expired.attempt_number
-RETURNING attempt.job_id, attempt.attempt_number, attempt.attempt_token, attempt.status, attempt.lease_expires_at, attempt.leased_at, attempt.started_at, attempt.completed_at, attempt.error_message, attempt.created_at, attempt.updated_at
+RETURNING attempt.job_id, attempt.attempt_number, attempt.attempt_token, attempt.status, attempt.lease_expires_at, attempt.leased_at, attempt.started_at, attempt.completed_at, attempt.error_message, attempt.created_at, attempt.updated_at, attempt.completion_receipt
 `
 
 func (q *Queries) ExpireConnectorJobAttempts(ctx context.Context, lim int32) ([]ConnectorJobAttempt, error) {
@@ -465,6 +359,7 @@ func (q *Queries) ExpireConnectorJobAttempts(ctx context.Context, lim int32) ([]
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CompletionReceipt,
 		); err != nil {
 			return nil, err
 		}
@@ -693,89 +588,6 @@ func (q *Queries) FinalizeCancelledConnectorJobs(ctx context.Context, lim int32)
 		return nil, err
 	}
 	return items, nil
-}
-
-const getClaimedConnectorJob = `-- name: GetClaimedConnectorJob :one
-SELECT job.id, job.connector_id, job.agent_id, job.need_id, job.request_id, job.orchestration_id, job.target_position, job.canary_cohort, job.operation_kind, job.operation_name, job.operation_revision, job.mode, job.input_schema_hash, job.output_schema_hash, job.input_payload, job.status, job.idempotency_key, job.cancel_requested_at, job.deadline_at, job.output_payload, job.error_code, job.error_message, job.started_at, job.completed_at, job.created_at, job.updated_at, job.request_hash, attempt.attempt_number, attempt.attempt_token, attempt.lease_expires_at
-FROM connector_jobs job
-JOIN connector_job_attempts attempt ON attempt.job_id = job.id
-WHERE job.id = $1 AND attempt.attempt_number = $2
-`
-
-type GetClaimedConnectorJobParams struct {
-	JobID         pgtype.UUID `json:"job_id"`
-	AttemptNumber int32       `json:"attempt_number"`
-}
-
-type GetClaimedConnectorJobRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	ConnectorID       pgtype.UUID        `json:"connector_id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	NeedID            pgtype.UUID        `json:"need_id"`
-	RequestID         pgtype.UUID        `json:"request_id"`
-	OrchestrationID   pgtype.UUID        `json:"orchestration_id"`
-	TargetPosition    pgtype.Int4        `json:"target_position"`
-	CanaryCohort      bool               `json:"canary_cohort"`
-	OperationKind     string             `json:"operation_kind"`
-	OperationName     string             `json:"operation_name"`
-	OperationRevision int32              `json:"operation_revision"`
-	Mode              string             `json:"mode"`
-	InputSchemaHash   string             `json:"input_schema_hash"`
-	OutputSchemaHash  string             `json:"output_schema_hash"`
-	InputPayload      []byte             `json:"input_payload"`
-	Status            string             `json:"status"`
-	IdempotencyKey    pgtype.UUID        `json:"idempotency_key"`
-	CancelRequestedAt pgtype.Timestamptz `json:"cancel_requested_at"`
-	DeadlineAt        pgtype.Timestamptz `json:"deadline_at"`
-	OutputPayload     []byte             `json:"output_payload"`
-	ErrorCode         pgtype.Text        `json:"error_code"`
-	ErrorMessage      pgtype.Text        `json:"error_message"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	RequestHash       string             `json:"request_hash"`
-	AttemptNumber     int32              `json:"attempt_number"`
-	AttemptToken      pgtype.UUID        `json:"attempt_token"`
-	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
-}
-
-func (q *Queries) GetClaimedConnectorJob(ctx context.Context, arg GetClaimedConnectorJobParams) (GetClaimedConnectorJobRow, error) {
-	row := q.db.QueryRow(ctx, getClaimedConnectorJob, arg.JobID, arg.AttemptNumber)
-	var i GetClaimedConnectorJobRow
-	err := row.Scan(
-		&i.ID,
-		&i.ConnectorID,
-		&i.AgentID,
-		&i.NeedID,
-		&i.RequestID,
-		&i.OrchestrationID,
-		&i.TargetPosition,
-		&i.CanaryCohort,
-		&i.OperationKind,
-		&i.OperationName,
-		&i.OperationRevision,
-		&i.Mode,
-		&i.InputSchemaHash,
-		&i.OutputSchemaHash,
-		&i.InputPayload,
-		&i.Status,
-		&i.IdempotencyKey,
-		&i.CancelRequestedAt,
-		&i.DeadlineAt,
-		&i.OutputPayload,
-		&i.ErrorCode,
-		&i.ErrorMessage,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RequestHash,
-		&i.AttemptNumber,
-		&i.AttemptToken,
-		&i.LeaseExpiresAt,
-	)
-	return i, err
 }
 
 const getConnectorJob = `-- name: GetConnectorJob :one
@@ -1051,44 +863,6 @@ func (q *Queries) InsertConnectorJob(ctx context.Context, arg InsertConnectorJob
 	return i, err
 }
 
-const listConnectorCancellationNotices = `-- name: ListConnectorCancellationNotices :many
-SELECT job.id AS job_id, attempt.attempt_token
-FROM connector_jobs job
-JOIN connector_job_attempts attempt ON attempt.job_id = job.id
-WHERE job.connector_id = $1
-  AND job.status = 'running'
-  AND job.cancel_requested_at IS NOT NULL
-  AND attempt.status IN ('leased', 'running')
-  AND attempt.lease_expires_at > now()
-ORDER BY job.cancel_requested_at, job.id
-LIMIT 100
-`
-
-type ListConnectorCancellationNoticesRow struct {
-	JobID        pgtype.UUID `json:"job_id"`
-	AttemptToken pgtype.UUID `json:"attempt_token"`
-}
-
-func (q *Queries) ListConnectorCancellationNotices(ctx context.Context, connectorID pgtype.UUID) ([]ListConnectorCancellationNoticesRow, error) {
-	rows, err := q.db.Query(ctx, listConnectorCancellationNotices, connectorID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListConnectorCancellationNoticesRow{}
-	for rows.Next() {
-		var i ListConnectorCancellationNoticesRow
-		if err := rows.Scan(&i.JobID, &i.AttemptToken); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listConnectorJobEvents = `-- name: ListConnectorJobEvents :many
 SELECT job_id, sequence, attempt_number, attempt_sequence, kind, payload, created_at FROM (
     SELECT job_id, sequence, attempt_number, attempt_sequence, kind, payload, created_at FROM connector_job_events
@@ -1185,39 +959,68 @@ func (q *Queries) ListConnectorJobsByOrchestration(ctx context.Context, orchestr
 	return items, nil
 }
 
-const renewActiveConnectorJobAttempt = `-- name: RenewActiveConnectorJobAttempt :execrows
-UPDATE connector_job_attempts attempt
-SET lease_expires_at = now() + make_interval(secs => $1::integer), updated_at = now()
-FROM connector_jobs job
-WHERE job.id = attempt.job_id
-  AND job.id = $2
-  AND job.connector_id = $3
-  AND job.status = 'running'
-  AND job.cancel_requested_at IS NULL
-  AND job.deadline_at > now()
-  AND attempt.attempt_token = $4
-  AND attempt.status IN ('leased', 'running')
-  AND attempt.lease_expires_at > now()
+const replayConnectorCompletion = `-- name: ReplayConnectorCompletion :one
+SELECT job.id, job.connector_id, job.agent_id, job.need_id, job.request_id, job.orchestration_id, job.target_position, job.canary_cohort, job.operation_kind, job.operation_name, job.operation_revision, job.mode, job.input_schema_hash, job.output_schema_hash, job.input_payload, job.status, job.idempotency_key, job.cancel_requested_at, job.deadline_at, job.output_payload, job.error_code, job.error_message, job.started_at, job.completed_at, job.created_at, job.updated_at, job.request_hash FROM connector_jobs job
+JOIN connector_job_attempts attempt ON attempt.job_id = job.id
+WHERE job.id = $1 AND job.connector_id = $2
+  AND attempt.attempt_token = $3
+  AND attempt.status IN ('succeeded', 'failed')
+  AND job.status IN ('succeeded', 'failed', 'cancelled', 'skipped')
+  AND attempt.completion_receipt = jsonb_build_object('succeeded', $4::boolean, 'output', $5::jsonb, 'code', $6::text, 'error', $7::text)
+  AND NOT EXISTS (SELECT 1 FROM connector_job_attempts newer WHERE newer.job_id = job.id AND newer.attempt_number > attempt.attempt_number)
 `
 
-type RenewActiveConnectorJobAttemptParams struct {
-	LeaseSeconds int32       `json:"lease_seconds"`
-	JobID        pgtype.UUID `json:"job_id"`
-	ConnectorID  pgtype.UUID `json:"connector_id"`
-	AttemptToken pgtype.UUID `json:"attempt_token"`
+type ReplayConnectorCompletionParams struct {
+	JobID         pgtype.UUID `json:"job_id"`
+	ConnectorID   pgtype.UUID `json:"connector_id"`
+	AttemptToken  pgtype.UUID `json:"attempt_token"`
+	Succeeded     bool        `json:"succeeded"`
+	OutputPayload []byte      `json:"output_payload"`
+	ErrorCode     string      `json:"error_code"`
+	ErrorMessage  string      `json:"error_message"`
 }
 
-func (q *Queries) RenewActiveConnectorJobAttempt(ctx context.Context, arg RenewActiveConnectorJobAttemptParams) (int64, error) {
-	result, err := q.db.Exec(ctx, renewActiveConnectorJobAttempt,
-		arg.LeaseSeconds,
+func (q *Queries) ReplayConnectorCompletion(ctx context.Context, arg ReplayConnectorCompletionParams) (ConnectorJob, error) {
+	row := q.db.QueryRow(ctx, replayConnectorCompletion,
 		arg.JobID,
 		arg.ConnectorID,
 		arg.AttemptToken,
+		arg.Succeeded,
+		arg.OutputPayload,
+		arg.ErrorCode,
+		arg.ErrorMessage,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	var i ConnectorJob
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectorID,
+		&i.AgentID,
+		&i.NeedID,
+		&i.RequestID,
+		&i.OrchestrationID,
+		&i.TargetPosition,
+		&i.CanaryCohort,
+		&i.OperationKind,
+		&i.OperationName,
+		&i.OperationRevision,
+		&i.Mode,
+		&i.InputSchemaHash,
+		&i.OutputSchemaHash,
+		&i.InputPayload,
+		&i.Status,
+		&i.IdempotencyKey,
+		&i.CancelRequestedAt,
+		&i.DeadlineAt,
+		&i.OutputPayload,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RequestHash,
+	)
+	return i, err
 }
 
 const skipConnectorJob = `-- name: SkipConnectorJob :one
@@ -1266,33 +1069,4 @@ func (q *Queries) SkipConnectorJob(ctx context.Context, arg SkipConnectorJobPara
 		&i.RequestHash,
 	)
 	return i, err
-}
-
-const startConnectorJobAttempt = `-- name: StartConnectorJobAttempt :execrows
-UPDATE connector_job_attempts attempt
-SET status = 'running', started_at = now(), updated_at = now()
-FROM connector_jobs job
-WHERE attempt.job_id = $1
-  AND attempt.attempt_token = $2
-  AND attempt.status = 'leased'
-  AND attempt.lease_expires_at > now()
-  AND job.id = attempt.job_id
-  AND job.connector_id = $3
-  AND job.status = 'running'
-  AND job.cancel_requested_at IS NULL
-  AND job.deadline_at > now()
-`
-
-type StartConnectorJobAttemptParams struct {
-	JobID        pgtype.UUID `json:"job_id"`
-	AttemptToken pgtype.UUID `json:"attempt_token"`
-	ConnectorID  pgtype.UUID `json:"connector_id"`
-}
-
-func (q *Queries) StartConnectorJobAttempt(ctx context.Context, arg StartConnectorJobAttemptParams) (int64, error) {
-	result, err := q.db.Exec(ctx, startConnectorJobAttempt, arg.JobID, arg.AttemptToken, arg.ConnectorID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

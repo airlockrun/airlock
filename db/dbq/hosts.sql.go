@@ -156,6 +156,46 @@ WITH candidate AS (
       AND need.deleted_at IS NULL AND connector.lifecycle = 'active' AND connector.readiness = 'ready'
       AND (need.bound_connector_id = job.connector_id OR job.orchestration_id IS NOT NULL)
       AND connector_interface_satisfies_need(connector.interface_descriptor, connector.contract_id, need.spec)
+      AND ((job.operation_kind = 'command' AND (
+          EXISTS (
+              SELECT 1 FROM jsonb_array_elements(need.spec->'commands') AS required_op(value)
+              WHERE required_op.value->>'name' = job.operation_name
+                AND (required_op.value->>'revision')::integer = job.operation_revision
+                AND required_op.value->>'mode' = job.mode
+                AND required_op.value->>'inputSchemaHash' = job.input_schema_hash
+                AND required_op.value->>'outputSchemaHash' = job.output_schema_hash
+          )
+          AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements(connector.interface_descriptor->'commands') AS provided_op(value)
+              WHERE provided_op.value->>'name' = job.operation_name
+                AND (provided_op.value->>'revision')::integer = job.operation_revision
+                AND provided_op.value->>'mode' = job.mode
+                AND provided_op.value->>'inputSchemaHash' = job.input_schema_hash
+                AND provided_op.value->>'outputSchemaHash' = job.output_schema_hash
+          )
+      )) OR (job.operation_kind <> 'command' AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(need.spec->'directories') AS required_dir(value)
+          JOIN LATERAL (
+              SELECT provided.value
+              FROM jsonb_array_elements(connector.interface_descriptor->'directories') AS provided(value)
+              WHERE provided.value->>'name' = required_dir.value->>'name'
+                AND (provided.value->>'revision')::integer = job.operation_revision
+          ) provided_dir ON true
+          WHERE required_dir.value->>'name' = job.operation_name
+            AND (required_dir.value->>'revision')::integer = job.operation_revision
+            AND CASE job.operation_kind
+                WHEN 'directory_list' THEN coalesce((required_dir.value->>'list')::boolean, false) AND coalesce((provided_dir.value->>'list')::boolean, false)
+                WHEN 'directory_stat' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_read' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_export' THEN coalesce((required_dir.value->>'read')::boolean, false) AND coalesce((provided_dir.value->>'read')::boolean, false)
+                WHEN 'directory_write' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_delete' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_move' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                WHEN 'directory_import' THEN coalesce((required_dir.value->>'write')::boolean, false) AND coalesce((provided_dir.value->>'write')::boolean, false)
+                ELSE false
+            END
+      )))
       AND NOT EXISTS (
           SELECT 1 FROM connector_job_attempts attempt
           WHERE attempt.job_id = job.id AND attempt.status IN ('leased', 'running') AND attempt.lease_expires_at > now()
@@ -169,7 +209,7 @@ WITH candidate AS (
 ), attempt AS (
     INSERT INTO connector_job_attempts (job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at)
     SELECT id, attempt_number, gen_random_uuid(), 'running', now() + make_interval(secs => $2::integer), now(), now() FROM numbered
-    RETURNING job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at, completed_at, error_message, created_at, updated_at
+    RETURNING job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at, completed_at, error_message, created_at, updated_at, completion_receipt
 )
 SELECT numbered.id, numbered.connector_id, numbered.agent_id, numbered.need_id, numbered.request_id, numbered.orchestration_id, numbered.target_position, numbered.canary_cohort, numbered.operation_kind, numbered.operation_name, numbered.operation_revision, numbered.mode, numbered.input_schema_hash, numbered.output_schema_hash, numbered.input_payload, numbered.status, numbered.idempotency_key, numbered.cancel_requested_at, numbered.deadline_at, numbered.output_payload, numbered.error_code, numbered.error_message, numbered.started_at, numbered.completed_at, numbered.created_at, numbered.updated_at, numbered.request_hash, numbered.attempt_number, attempt.attempt_number, attempt.attempt_token, attempt.lease_expires_at
 FROM numbered JOIN attempt ON attempt.job_id = numbered.id
@@ -298,6 +338,17 @@ WITH host_claim_lock AS MATERIALIZED (
     FROM host_management_jobs job
     JOIN host_snapshot host ON host.id = job.host_id
     WHERE job.status IN ('queued', 'running') AND job.deadline_at > now()
+      AND (job.kind = 'connector_remove' OR NOT EXISTS (
+          SELECT 1 FROM host_management_jobs pending_inventory
+          WHERE pending_inventory.connector_id = job.connector_id
+            AND pending_inventory.status = 'succeeded'
+            AND pending_inventory.inventory_revision IS NOT NULL
+            AND pending_inventory.inventory_acknowledged_at IS NULL
+      ))
+      AND (job.kind = 'shell' OR EXISTS (
+          SELECT 1 FROM connector_resources connector
+          WHERE connector.id = job.connector_id AND connector.host_id = job.host_id AND connector.lifecycle = 'active'
+      ))
       AND (host.access_mode = 'full' OR (host.access_mode = 'update_only' AND job.kind IN ('connector_update', 'connector_rollback')))
       AND (job.artifact_file_id IS NULL OR EXISTS (
           SELECT 1 FROM connector_artifact_files artifact_file
@@ -320,16 +371,16 @@ WITH host_claim_lock AS MATERIALIZED (
 ), claimed AS (
     UPDATE host_management_jobs job
     SET status = 'running', started_at = coalesce(started_at, now()), updated_at = now()
-    FROM candidate WHERE job.id = candidate.id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at
+    FROM candidate WHERE job.id = candidate.id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at, job.inventory_revision, job.inventory_acknowledged_at
 ), numbered AS (
-    SELECT claimed.id, claimed.host_id, claimed.connector_id, claimed.requested_by_user_id, claimed.kind, claimed.artifact_file_id, claimed.input_payload, claimed.secret_input, claimed.status, claimed.output_payload, claimed.secret_output, claimed.error_message, claimed.deadline_at, claimed.started_at, claimed.completed_at, claimed.created_at, claimed.updated_at, coalesce((SELECT max(attempt_number) FROM host_management_attempts WHERE job_id = claimed.id), 0) + 1 AS attempt_number
+    SELECT claimed.id, claimed.host_id, claimed.connector_id, claimed.requested_by_user_id, claimed.kind, claimed.artifact_file_id, claimed.input_payload, claimed.secret_input, claimed.status, claimed.output_payload, claimed.secret_output, claimed.error_message, claimed.deadline_at, claimed.started_at, claimed.completed_at, claimed.created_at, claimed.updated_at, claimed.inventory_revision, claimed.inventory_acknowledged_at, coalesce((SELECT max(attempt_number) FROM host_management_attempts WHERE job_id = claimed.id), 0) + 1 AS attempt_number
     FROM claimed
 ), attempt AS (
     INSERT INTO host_management_attempts (job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at)
     SELECT id, attempt_number, gen_random_uuid(), 'running', now() + make_interval(secs => $2::integer), now(), now()
     FROM numbered RETURNING job_id, attempt_number, attempt_token, status, lease_expires_at, leased_at, started_at, completed_at, error_message, created_at, updated_at
 )
-SELECT numbered.id, numbered.host_id, numbered.connector_id, numbered.requested_by_user_id, numbered.kind, numbered.artifact_file_id, numbered.input_payload, numbered.secret_input, numbered.status, numbered.output_payload, numbered.secret_output, numbered.error_message, numbered.deadline_at, numbered.started_at, numbered.completed_at, numbered.created_at, numbered.updated_at, numbered.attempt_number, attempt.attempt_number, attempt.attempt_token, attempt.lease_expires_at
+SELECT numbered.id, numbered.host_id, numbered.connector_id, numbered.requested_by_user_id, numbered.kind, numbered.artifact_file_id, numbered.input_payload, numbered.secret_input, numbered.status, numbered.output_payload, numbered.secret_output, numbered.error_message, numbered.deadline_at, numbered.started_at, numbered.completed_at, numbered.created_at, numbered.updated_at, numbered.inventory_revision, numbered.inventory_acknowledged_at, numbered.attempt_number, attempt.attempt_number, attempt.attempt_token, attempt.lease_expires_at
 FROM numbered JOIN attempt ON attempt.job_id = numbered.id
 `
 
@@ -339,27 +390,29 @@ type ClaimHostManagementJobParams struct {
 }
 
 type ClaimHostManagementJobRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	HostID            pgtype.UUID        `json:"host_id"`
-	ConnectorID       pgtype.UUID        `json:"connector_id"`
-	RequestedByUserID pgtype.UUID        `json:"requested_by_user_id"`
-	Kind              string             `json:"kind"`
-	ArtifactFileID    pgtype.UUID        `json:"artifact_file_id"`
-	InputPayload      []byte             `json:"input_payload"`
-	SecretInput       string             `json:"secret_input"`
-	Status            string             `json:"status"`
-	OutputPayload     []byte             `json:"output_payload"`
-	SecretOutput      pgtype.Text        `json:"secret_output"`
-	ErrorMessage      pgtype.Text        `json:"error_message"`
-	DeadlineAt        pgtype.Timestamptz `json:"deadline_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	AttemptNumber     int32              `json:"attempt_number"`
-	AttemptNumber_2   int32              `json:"attempt_number_2"`
-	AttemptToken      pgtype.UUID        `json:"attempt_token"`
-	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
+	ID                      pgtype.UUID        `json:"id"`
+	HostID                  pgtype.UUID        `json:"host_id"`
+	ConnectorID             pgtype.UUID        `json:"connector_id"`
+	RequestedByUserID       pgtype.UUID        `json:"requested_by_user_id"`
+	Kind                    string             `json:"kind"`
+	ArtifactFileID          pgtype.UUID        `json:"artifact_file_id"`
+	InputPayload            []byte             `json:"input_payload"`
+	SecretInput             string             `json:"secret_input"`
+	Status                  string             `json:"status"`
+	OutputPayload           []byte             `json:"output_payload"`
+	SecretOutput            pgtype.Text        `json:"secret_output"`
+	ErrorMessage            pgtype.Text        `json:"error_message"`
+	DeadlineAt              pgtype.Timestamptz `json:"deadline_at"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	CompletedAt             pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	InventoryRevision       pgtype.Int8        `json:"inventory_revision"`
+	InventoryAcknowledgedAt pgtype.Timestamptz `json:"inventory_acknowledged_at"`
+	AttemptNumber           int32              `json:"attempt_number"`
+	AttemptNumber_2         int32              `json:"attempt_number_2"`
+	AttemptToken            pgtype.UUID        `json:"attempt_token"`
+	LeaseExpiresAt          pgtype.Timestamptz `json:"lease_expires_at"`
 }
 
 func (q *Queries) ClaimHostManagementJob(ctx context.Context, arg ClaimHostManagementJobParams) (ClaimHostManagementJobRow, error) {
@@ -383,6 +436,8 @@ func (q *Queries) ClaimHostManagementJob(ctx context.Context, arg ClaimHostManag
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InventoryRevision,
+		&i.InventoryAcknowledgedAt,
 		&i.AttemptNumber,
 		&i.AttemptNumber_2,
 		&i.AttemptToken,
@@ -404,13 +459,20 @@ func (q *Queries) CleanupHostEnrollmentAttempts(ctx context.Context) (int64, err
 }
 
 const completeHostManagementJob = `-- name: CompleteHostManagementJob :one
-WITH fenced AS (
+WITH connector_lock AS MATERIALIZED (
+    SELECT connector.id, connector.lifecycle
+    FROM connector_resources connector
+    JOIN host_management_jobs job ON job.connector_id = connector.id
+    WHERE job.id = $1 AND job.host_id = $2 AND connector.host_id = job.host_id
+    FOR UPDATE OF connector
+), fenced AS (
     SELECT attempt.job_id, attempt.attempt_number
     FROM host_management_attempts attempt
     JOIN host_management_jobs job ON job.id = attempt.job_id
-    WHERE attempt.job_id = $1 AND attempt.attempt_token = $2
+    WHERE attempt.job_id = $1 AND attempt.attempt_token = $3
       AND attempt.status IN ('leased', 'running', 'interrupted')
-      AND job.host_id = $3 AND job.status IN ('running', 'timed_out')
+      AND job.host_id = $2 AND job.status IN ('running', 'timed_out')
+      AND (job.kind = 'shell' OR EXISTS (SELECT 1 FROM connector_lock WHERE lifecycle = 'active'))
       AND NOT EXISTS (SELECT 1 FROM host_management_attempts newer WHERE newer.job_id = attempt.job_id AND newer.attempt_number > attempt.attempt_number)
     FOR UPDATE OF job, attempt
 ), finished_attempt AS (
@@ -427,26 +489,26 @@ WITH fenced AS (
         secret_output = CASE WHEN $4::boolean THEN $7::text ELSE NULL END,
         error_message = CASE WHEN $4::boolean THEN NULL ELSE $5::text END,
         completed_at = now(), updated_at = now()
-    FROM finished_attempt WHERE job.id = finished_attempt.job_id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at
+    FROM finished_attempt WHERE job.id = finished_attempt.job_id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at, job.inventory_revision, job.inventory_acknowledged_at
 ), installed_connector AS (
     UPDATE connector_resources connector
-    SET lifecycle = 'active', readiness = 'starting', readiness_message = 'connector install completed; awaiting host sync',
+    SET readiness = 'starting', readiness_message = 'connector install completed; awaiting host sync',
         artifact_digest = artifact_file.digest, updated_at = now()
     FROM finished
     JOIN connector_artifact_files artifact_file ON artifact_file.id = finished.artifact_file_id
-    WHERE $4::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id
+    WHERE $4::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active'
 ), failed_install AS (
     UPDATE connector_resources connector
-    SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector install failed', artifact_digest = NULL, updated_at = now()
-    FROM finished WHERE NOT $4::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id
+    SET readiness = 'unhealthy', readiness_message = 'connector install failed', updated_at = now()
+    FROM finished WHERE NOT $4::boolean AND finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active'
 )
-SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at FROM finished
+SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at, inventory_revision, inventory_acknowledged_at FROM finished
 `
 
 type CompleteHostManagementJobParams struct {
 	JobID            pgtype.UUID `json:"job_id"`
-	AttemptToken     pgtype.UUID `json:"attempt_token"`
 	HostID           pgtype.UUID `json:"host_id"`
+	AttemptToken     pgtype.UUID `json:"attempt_token"`
 	Succeeded        bool        `json:"succeeded"`
 	ErrorMessage     string      `json:"error_message"`
 	CompletionStatus string      `json:"completion_status"`
@@ -454,30 +516,32 @@ type CompleteHostManagementJobParams struct {
 }
 
 type CompleteHostManagementJobRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	HostID            pgtype.UUID        `json:"host_id"`
-	ConnectorID       pgtype.UUID        `json:"connector_id"`
-	RequestedByUserID pgtype.UUID        `json:"requested_by_user_id"`
-	Kind              string             `json:"kind"`
-	ArtifactFileID    pgtype.UUID        `json:"artifact_file_id"`
-	InputPayload      []byte             `json:"input_payload"`
-	SecretInput       string             `json:"secret_input"`
-	Status            string             `json:"status"`
-	OutputPayload     []byte             `json:"output_payload"`
-	SecretOutput      pgtype.Text        `json:"secret_output"`
-	ErrorMessage      pgtype.Text        `json:"error_message"`
-	DeadlineAt        pgtype.Timestamptz `json:"deadline_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                      pgtype.UUID        `json:"id"`
+	HostID                  pgtype.UUID        `json:"host_id"`
+	ConnectorID             pgtype.UUID        `json:"connector_id"`
+	RequestedByUserID       pgtype.UUID        `json:"requested_by_user_id"`
+	Kind                    string             `json:"kind"`
+	ArtifactFileID          pgtype.UUID        `json:"artifact_file_id"`
+	InputPayload            []byte             `json:"input_payload"`
+	SecretInput             string             `json:"secret_input"`
+	Status                  string             `json:"status"`
+	OutputPayload           []byte             `json:"output_payload"`
+	SecretOutput            pgtype.Text        `json:"secret_output"`
+	ErrorMessage            pgtype.Text        `json:"error_message"`
+	DeadlineAt              pgtype.Timestamptz `json:"deadline_at"`
+	StartedAt               pgtype.Timestamptz `json:"started_at"`
+	CompletedAt             pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	InventoryRevision       pgtype.Int8        `json:"inventory_revision"`
+	InventoryAcknowledgedAt pgtype.Timestamptz `json:"inventory_acknowledged_at"`
 }
 
 func (q *Queries) CompleteHostManagementJob(ctx context.Context, arg CompleteHostManagementJobParams) (CompleteHostManagementJobRow, error) {
 	row := q.db.QueryRow(ctx, completeHostManagementJob,
 		arg.JobID,
-		arg.AttemptToken,
 		arg.HostID,
+		arg.AttemptToken,
 		arg.Succeeded,
 		arg.ErrorMessage,
 		arg.CompletionStatus,
@@ -502,6 +566,8 @@ func (q *Queries) CompleteHostManagementJob(ctx context.Context, arg CompleteHos
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InventoryRevision,
+		&i.InventoryAcknowledgedAt,
 	)
 	return i, err
 }
@@ -539,6 +605,20 @@ func (q *Queries) ConsumeHostEnrollment(ctx context.Context, arg ConsumeHostEnro
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const countHostConnectorAttempts = `-- name: CountHostConnectorAttempts :one
+SELECT count(*) FROM connector_job_attempts attempt
+JOIN connector_jobs job ON job.id = attempt.job_id
+JOIN connector_resources connector ON connector.id = job.connector_id
+WHERE connector.host_id = $1 AND attempt.status IN ('leased', 'running') AND attempt.lease_expires_at > now()
+`
+
+func (q *Queries) CountHostConnectorAttempts(ctx context.Context, hostID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countHostConnectorAttempts, hostID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countHostedConnectorsForHost = `-- name: CountHostedConnectorsForHost :one
@@ -682,7 +762,7 @@ INSERT INTO connector_resources (
     artifact_set_id, activation_manifest, activation_manifest_hash, inventory_revision,
     active_provenance, rollback_provenance, active_observation_state, rollback_observation_state
 )
-SELECT $1, $2, $3, 'connector-' || replace($1::text, '-', ''),
+SELECT CAST($1 AS uuid), $2, $3, 'connector-' || replace(CAST(CAST($1 AS uuid) AS text), '-', ''),
        artifact_set.kind, artifact_set.contract_id, artifact_set.name, $4,
        artifact_set.description, artifact_set.protocol_major, artifact_set.protocol_minor,
        artifact_set.features, artifact_set.artifact_version, artifact_file.digest,
@@ -942,6 +1022,9 @@ WITH retained AS (
     SELECT id FROM host_management_jobs
     WHERE status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
       AND completed_at <= now() - interval '30 days'
+      AND (inventory_revision IS NULL OR inventory_acknowledged_at IS NOT NULL OR EXISTS (
+          SELECT 1 FROM connector_resources connector WHERE connector.id = host_management_jobs.connector_id AND connector.lifecycle = 'revoked'
+      ))
     ORDER BY completed_at, id FOR UPDATE SKIP LOCKED LIMIT LEAST($1::integer, 100)
 )
 DELETE FROM host_management_jobs job USING retained WHERE job.id = retained.id
@@ -1006,18 +1089,28 @@ func (q *Queries) ExpireHostManagementAttempts(ctx context.Context, lim int32) (
 }
 
 const failExpiredHostManagementJobs = `-- name: FailExpiredHostManagementJobs :execrows
-WITH expired AS (
-    SELECT id FROM host_management_jobs
-    WHERE status IN ('queued', 'running') AND deadline_at <= now()
-    ORDER BY deadline_at, id FOR UPDATE SKIP LOCKED LIMIT LEAST($1::integer, 100)
+WITH connector_locks AS MATERIALIZED (
+    SELECT connector.id FROM connector_resources connector
+    WHERE EXISTS (
+        SELECT 1 FROM host_management_jobs job
+        WHERE job.connector_id = connector.id AND job.kind = 'connector_install'
+          AND job.status IN ('queued', 'running') AND job.deadline_at <= now()
+    )
+    ORDER BY connector.id FOR UPDATE SKIP LOCKED LIMIT LEAST($1::integer, 100)
+), expired AS (
+    SELECT job.id FROM host_management_jobs job
+    WHERE job.status IN ('queued', 'running') AND job.deadline_at <= now()
+      AND (job.kind <> 'connector_install' OR job.connector_id IS NULL
+           OR job.connector_id IN (SELECT id FROM connector_locks))
+    ORDER BY job.deadline_at, job.id FOR UPDATE OF job SKIP LOCKED LIMIT LEAST($1::integer, 100)
 ), finished AS (
 UPDATE host_management_jobs job
 SET status = 'timed_out', error_message = 'host management deadline exceeded', completed_at = now(), updated_at = now()
-FROM expired WHERE job.id = expired.id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at
+FROM expired WHERE job.id = expired.id RETURNING job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at, job.inventory_revision, job.inventory_acknowledged_at
 )
 UPDATE connector_resources connector
-SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector install timed out', artifact_digest = NULL, updated_at = now()
-FROM finished WHERE finished.kind = 'connector_install' AND connector.id = finished.connector_id
+SET readiness = 'unhealthy', readiness_message = 'connector install timed out', updated_at = now()
+FROM finished WHERE finished.kind = 'connector_install' AND connector.id = finished.connector_id AND connector.lifecycle = 'active'
 `
 
 func (q *Queries) FailExpiredHostManagementJobs(ctx context.Context, lim int32) (int64, error) {
@@ -1136,7 +1229,7 @@ func (q *Queries) GetCompatibleHostUpdateArtifact(ctx context.Context, arg GetCo
 }
 
 const getCompletedHostManagementJobForAttempt = `-- name: GetCompletedHostManagementJobForAttempt :one
-SELECT job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at
+SELECT job.id, job.host_id, job.connector_id, job.requested_by_user_id, job.kind, job.artifact_file_id, job.input_payload, job.secret_input, job.status, job.output_payload, job.secret_output, job.error_message, job.deadline_at, job.started_at, job.completed_at, job.created_at, job.updated_at, job.inventory_revision, job.inventory_acknowledged_at
 FROM host_management_jobs job
 JOIN host_management_attempts attempt ON attempt.job_id = job.id
 WHERE job.id = $1 AND job.host_id = $2 AND attempt.attempt_token = $3
@@ -1174,6 +1267,8 @@ func (q *Queries) GetCompletedHostManagementJobForAttempt(ctx context.Context, a
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InventoryRevision,
+		&i.InventoryAcknowledgedAt,
 	)
 	return i, err
 }
@@ -1289,6 +1384,25 @@ func (q *Queries) GetHostArtifactFile(ctx context.Context, artifactFileID pgtype
 	return i, err
 }
 
+const getHostContractInstallation = `-- name: GetHostContractInstallation :one
+SELECT id FROM connector_resources
+WHERE host_id = $1 AND contract_id = $2 AND contract_id <> ''
+  AND lifecycle = 'active' AND id <> $3
+`
+
+type GetHostContractInstallationParams struct {
+	HostID      pgtype.UUID `json:"host_id"`
+	ContractID  pgtype.Text `json:"contract_id"`
+	ExcludingID pgtype.UUID `json:"excluding_id"`
+}
+
+func (q *Queries) GetHostContractInstallation(ctx context.Context, arg GetHostContractInstallationParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getHostContractInstallation, arg.HostID, arg.ContractID, arg.ExcludingID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getHostCredentialBySelector = `-- name: GetHostCredentialBySelector :one
 SELECT credential.id, credential.host_id, credential.selector, credential.token_hash, credential.created_at, credential.last_used_at, credential.revoked_at, host.lifecycle AS host_lifecycle
 FROM host_credentials credential
@@ -1378,7 +1492,7 @@ func (q *Queries) GetHostEnrollmentForPoll(ctx context.Context, deviceCodeHash [
 }
 
 const getHostManagementJob = `-- name: GetHostManagementJob :one
-SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at FROM host_management_jobs WHERE id = $1
+SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at, inventory_revision, inventory_acknowledged_at FROM host_management_jobs WHERE id = $1
 `
 
 func (q *Queries) GetHostManagementJob(ctx context.Context, id pgtype.UUID) (HostManagementJob, error) {
@@ -1402,6 +1516,8 @@ func (q *Queries) GetHostManagementJob(ctx context.Context, id pgtype.UUID) (Hos
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InventoryRevision,
+		&i.InventoryAcknowledgedAt,
 	)
 	return i, err
 }
@@ -1597,6 +1713,24 @@ func (q *Queries) HasActiveConnectorManagementTransition(ctx context.Context, co
 	return active, err
 }
 
+const heartbeatHost = `-- name: HeartbeatHost :execrows
+UPDATE hosts SET last_seen_at = now(), access_mode = $1, updated_at = now()
+WHERE id = $2 AND lifecycle = 'active'
+`
+
+type HeartbeatHostParams struct {
+	AccessMode string      `json:"access_mode"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) HeartbeatHost(ctx context.Context, arg HeartbeatHostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, heartbeatHost, arg.AccessMode, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertHostManagementJob = `-- name: InsertHostManagementJob :one
 INSERT INTO host_management_jobs (
     id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id,
@@ -1605,7 +1739,7 @@ INSERT INTO host_management_jobs (
     $1, $2, $3, $4, $5, $6,
     '{}'::jsonb, $7, 'queued', $8
 )
-RETURNING id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at
+RETURNING id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at, inventory_revision, inventory_acknowledged_at
 `
 
 type InsertHostManagementJobParams struct {
@@ -1649,6 +1783,8 @@ func (q *Queries) InsertHostManagementJob(ctx context.Context, arg InsertHostMan
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InventoryRevision,
+		&i.InventoryAcknowledgedAt,
 	)
 	return i, err
 }
@@ -1750,7 +1886,7 @@ func (q *Queries) ListHostManagementEvents(ctx context.Context, jobID pgtype.UUI
 }
 
 const listHostManagementJobs = `-- name: ListHostManagementJobs :many
-SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at FROM host_management_jobs WHERE host_id = $1 ORDER BY created_at DESC, id DESC LIMIT LEAST($2::integer, 200)
+SELECT id, host_id, connector_id, requested_by_user_id, kind, artifact_file_id, input_payload, secret_input, status, output_payload, secret_output, error_message, deadline_at, started_at, completed_at, created_at, updated_at, inventory_revision, inventory_acknowledged_at FROM host_management_jobs WHERE host_id = $1 ORDER BY created_at DESC, id DESC LIMIT LEAST($2::integer, 200)
 `
 
 type ListHostManagementJobsParams struct {
@@ -1785,6 +1921,8 @@ func (q *Queries) ListHostManagementJobs(ctx context.Context, arg ListHostManage
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InventoryRevision,
+			&i.InventoryAcknowledgedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2137,6 +2275,15 @@ func (q *Queries) LockConnectorInventoryReservations(ctx context.Context, connec
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockHostDispatch = `-- name: LockHostDispatch :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 1751348322))
+`
+
+func (q *Queries) LockHostDispatch(ctx context.Context, hostID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockHostDispatch, hostID)
+	return err
 }
 
 const lockHostForInventory = `-- name: LockHostForInventory :one
@@ -2646,8 +2793,11 @@ func (q *Queries) SyncHostedConnector(ctx context.Context, arg SyncHostedConnect
 }
 
 const tombstoneConnectorInventory = `-- name: TombstoneConnectorInventory :one
-WITH prepared AS (
+WITH candidate AS MATERIALIZED (
+    SELECT id FROM connector_resources WHERE id = $3 FOR UPDATE
+), prepared AS (
     SELECT prepare_connector_parent_deletion('connector', $3, false)
+    FROM candidate
 ), direct_unbound AS (
     UPDATE agent_resource_needs need
     SET bound_connector_id = NULL
@@ -2661,6 +2811,17 @@ WITH prepared AS (
     DELETE FROM connector_reservations reservation WHERE reservation.connector_id = $3
 ), removed_grants AS (
     DELETE FROM resource_grants grant_row WHERE grant_row.connector_id = $3
+), cancelled_management AS (
+    UPDATE host_management_jobs job
+    SET status = 'cancelled', error_message = 'connector removed', completed_at = now(), updated_at = now()
+    FROM prepared
+    WHERE job.connector_id = $3 AND job.status IN ('queued', 'running', 'timed_out')
+    RETURNING job.id
+), fenced_management_attempts AS (
+    UPDATE host_management_attempts attempt
+    SET status = 'failed', error_message = 'connector removed', lease_expires_at = now(), completed_at = now(), updated_at = now()
+    FROM cancelled_management job
+    WHERE attempt.job_id = job.id AND attempt.status IN ('leased', 'running', 'interrupted')
 )
 UPDATE connector_resources connector
 SET lifecycle = 'revoked', readiness = 'offline', readiness_message = 'connector removed by host',

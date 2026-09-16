@@ -14,6 +14,7 @@ import (
 	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/db/notifications"
 	"github.com/airlockrun/airlock/service"
 	connectorssvc "github.com/airlockrun/airlock/service/connectors"
 	"github.com/google/uuid"
@@ -22,30 +23,12 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	MaxPayloadBytes = 1 << 20
-	leaseDuration   = 45 * time.Second
-)
+const MaxPayloadBytes = 1 << 20
 
 type Service struct {
-	db     *db.DB
-	logger *zap.Logger
-}
-
-type Delivery struct {
-	JobID             uuid.UUID
-	AttemptNumber     int32
-	AttemptToken      uuid.UUID
-	OperationName     string
-	OperationKind     string
-	OperationRevision int32
-	Mode              string
-	InputSchemaHash   string
-	OutputSchemaHash  string
-	Input             json.RawMessage
-	IdempotencyKey    uuid.UUID
-	Deadline          time.Time
-	LeaseExpiresAt    time.Time
+	db            *db.DB
+	logger        *zap.Logger
+	notifications *notifications.Relay
 }
 
 type Detail struct {
@@ -53,21 +36,11 @@ type Detail struct {
 	Events []dbq.ConnectorJobEvent
 }
 
-type Cancellation struct {
-	JobID        uuid.UUID
-	AttemptToken uuid.UUID
-}
-
-type ActiveAttempt struct {
-	JobID        uuid.UUID
-	AttemptToken uuid.UUID
-}
-
-func New(database *db.DB, logger *zap.Logger) *Service {
-	if database == nil || logger == nil {
+func New(database *db.DB, relay *notifications.Relay, logger *zap.Logger) *Service {
+	if database == nil || relay == nil || logger == nil {
 		panic("connectorjobs: nil dependency")
 	}
-	return &Service{db: database, logger: logger}
+	return &Service{db: database, notifications: relay, logger: logger}
 }
 
 func pg(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
@@ -208,103 +181,6 @@ func hashRequest(value any) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (s *Service) Request(ctx context.Context, connectorID uuid.UUID) (*Delivery, error) {
-	q := dbq.New(s.db.Pool())
-	if _, err := q.FailExpiredConnectorJobs(ctx, 100); err != nil {
-		return nil, err
-	}
-	if _, err := q.ExpireConnectorJobAttempts(ctx, 100); err != nil {
-		return nil, err
-	}
-	attempt, err := q.ClaimConnectorJob(ctx, dbq.ClaimConnectorJobParams{ConnectorID: pg(connectorID), LeaseSeconds: int32(leaseDuration.Seconds())})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if affected, err := q.StartConnectorJobAttempt(ctx, dbq.StartConnectorJobAttemptParams{
-		JobID: attempt.JobID, AttemptToken: attempt.AttemptToken, ConnectorID: pg(connectorID),
-	}); err != nil || affected != 1 {
-		if err != nil {
-			return nil, err
-		}
-		return nil, service.ErrConflict
-	}
-	row, err := q.GetClaimedConnectorJob(ctx, dbq.GetClaimedConnectorJobParams{JobID: attempt.JobID, AttemptNumber: attempt.AttemptNumber})
-	if err != nil {
-		return nil, err
-	}
-	return &Delivery{
-		JobID: uuid.UUID(row.ID.Bytes), AttemptNumber: row.AttemptNumber, AttemptToken: uuid.UUID(row.AttemptToken.Bytes),
-		OperationName: row.OperationName, OperationRevision: row.OperationRevision, Mode: row.Mode,
-		OperationKind:   row.OperationKind,
-		InputSchemaHash: row.InputSchemaHash, OutputSchemaHash: row.OutputSchemaHash, Input: row.InputPayload,
-		IdempotencyKey: uuid.UUID(row.IdempotencyKey.Bytes), Deadline: row.DeadlineAt.Time, LeaseExpiresAt: row.LeaseExpiresAt.Time,
-	}, nil
-}
-
-func (s *Service) WaitForDelivery(ctx context.Context, connectorID uuid.UUID, maximum time.Duration) (*Delivery, error) {
-	if maximum <= 0 || maximum > 30*time.Second {
-		maximum = 30 * time.Second
-	}
-	if delivery, err := s.Request(ctx, connectorID); err != nil || delivery != nil {
-		return delivery, err
-	}
-	conn, err := s.db.Pool().Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, "LISTEN airlock_connector_dispatch"); err != nil {
-		return nil, err
-	}
-	defer conn.Exec(context.Background(), "UNLISTEN airlock_connector_dispatch")
-	if delivery, err := s.Request(ctx, connectorID); err != nil || delivery != nil {
-		return delivery, err
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, maximum)
-	defer cancel()
-	for {
-		notification, err := conn.Conn().WaitForNotification(waitCtx)
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if notification.Payload != connectorID.String() {
-			continue
-		}
-		if delivery, err := s.Request(ctx, connectorID); err != nil || delivery != nil {
-			return delivery, err
-		}
-	}
-}
-
-func (s *Service) RenewActiveAttempts(ctx context.Context, connectorID uuid.UUID, attempts []ActiveAttempt) error {
-	if len(attempts) > protocol.MaxActiveAttempts {
-		return service.Detail(service.ErrInvalidInput, "connector heartbeat has too many active attempts")
-	}
-	seen := make(map[uuid.UUID]struct{}, len(attempts))
-	q := dbq.New(s.db.Pool())
-	for _, attempt := range attempts {
-		if attempt.JobID == uuid.Nil || attempt.AttemptToken == uuid.Nil {
-			return service.Detail(service.ErrInvalidInput, "connector heartbeat has an invalid active attempt")
-		}
-		if _, exists := seen[attempt.JobID]; exists {
-			return service.Detail(service.ErrInvalidInput, "connector heartbeat repeats an active job")
-		}
-		seen[attempt.JobID] = struct{}{}
-		if _, err := q.RenewActiveConnectorJobAttempt(ctx, dbq.RenewActiveConnectorJobAttemptParams{
-			LeaseSeconds: int32(leaseDuration.Seconds()), JobID: pg(attempt.JobID), ConnectorID: pg(connectorID), AttemptToken: pg(attempt.AttemptToken),
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Service) AppendEvent(ctx context.Context, connectorID, jobID, attemptToken uuid.UUID, attemptSequence int64, kind string, payload json.RawMessage) (dbq.AppendConnectorJobEventRow, error) {
 	if attemptSequence <= 0 {
 		return dbq.AppendConnectorJobEventRow{}, service.Detail(service.ErrInvalidInput, "connector event sequence must be positive")
@@ -332,6 +208,9 @@ func (s *Service) AppendEvent(ctx context.Context, connectorID, jobID, attemptTo
 }
 
 func (s *Service) Complete(ctx context.Context, connectorID, jobID, attemptToken uuid.UUID, succeeded bool, output json.RawMessage, errorCode, errorMessage string) (dbq.ConnectorJob, error) {
+	if len(output) > MaxPayloadBytes || len(output) > 0 && !json.Valid(output) {
+		return dbq.ConnectorJob{}, service.Detail(service.ErrInvalidInput, "connector output must be valid JSON no larger than 1 MiB")
+	}
 	if succeeded && (len(output) == 0 || len(output) > MaxPayloadBytes || !json.Valid(output)) {
 		return dbq.ConnectorJob{}, service.Detail(service.ErrInvalidInput, "connector command output must be valid JSON no larger than 1 MiB")
 	}
@@ -343,59 +222,15 @@ func (s *Service) Complete(ctx context.Context, connectorID, jobID, attemptToken
 		OutputPayload: output, ErrorCode: errorCode, ErrorMessage: errorMessage,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
+		row, err = dbq.New(s.db.Pool()).ReplayConnectorCompletion(ctx, dbq.ReplayConnectorCompletionParams{
+			ConnectorID: pg(connectorID), JobID: pg(jobID), AttemptToken: pg(attemptToken), Succeeded: succeeded,
+			OutputPayload: output, ErrorCode: errorCode, ErrorMessage: errorMessage,
+		})
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
 		return dbq.ConnectorJob{}, service.Detail(service.ErrConflict, "connector job lease is stale")
 	}
 	return row, err
-}
-
-func (s *Service) Cancellations(ctx context.Context, connectorID uuid.UUID) ([]Cancellation, error) {
-	rows, err := dbq.New(s.db.Pool()).ListConnectorCancellationNotices(ctx, pg(connectorID))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Cancellation, len(rows))
-	for i, row := range rows {
-		out[i] = Cancellation{JobID: uuid.UUID(row.JobID.Bytes), AttemptToken: uuid.UUID(row.AttemptToken.Bytes)}
-	}
-	return out, nil
-}
-
-func (s *Service) WaitForCancellations(ctx context.Context, connectorID uuid.UUID, maximum time.Duration) ([]Cancellation, error) {
-	if maximum <= 0 || maximum > 30*time.Second {
-		maximum = 30 * time.Second
-	}
-	if cancellations, err := s.Cancellations(ctx, connectorID); err != nil || len(cancellations) > 0 {
-		return cancellations, err
-	}
-	conn, err := s.db.Pool().Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, "LISTEN airlock_connector_dispatch"); err != nil {
-		return nil, err
-	}
-	defer conn.Exec(context.Background(), "UNLISTEN airlock_connector_dispatch")
-	if cancellations, err := s.Cancellations(ctx, connectorID); err != nil || len(cancellations) > 0 {
-		return cancellations, err
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, maximum)
-	defer cancel()
-	for {
-		notification, err := conn.Conn().WaitForNotification(waitCtx)
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if notification.Payload != connectorID.String() {
-			continue
-		}
-		if cancellations, err := s.Cancellations(ctx, connectorID); err != nil || len(cancellations) > 0 {
-			return cancellations, err
-		}
-	}
 }
 
 func (s *Service) Get(ctx context.Context, agentID, jobID uuid.UUID) (dbq.ConnectorJob, error) {
@@ -481,6 +316,8 @@ func (s *Service) CancelForNeed(ctx context.Context, agentID, jobID uuid.UUID, n
 }
 
 func (s *Service) Wait(ctx context.Context, agentID, jobID uuid.UUID) (dbq.ConnectorJob, error) {
+	sub := s.notifications.Subscribe(notifications.ConnectorEvents, jobID)
+	defer sub.Close()
 	terminal := func() (dbq.ConnectorJob, bool, error) {
 		job, err := s.Get(ctx, agentID, jobID)
 		if err != nil {
@@ -493,26 +330,13 @@ func (s *Service) Wait(ctx context.Context, agentID, jobID uuid.UUID) (dbq.Conne
 			return job, false, nil
 		}
 	}
-	job, done, err := terminal()
-	if err != nil || done {
-		return job, err
-	}
-	conn, err := s.db.Pool().Acquire(ctx)
-	if err != nil {
-		return dbq.ConnectorJob{}, err
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, "LISTEN airlock_connector_events"); err != nil {
-		return dbq.ConnectorJob{}, err
-	}
-	defer conn.Exec(context.Background(), "UNLISTEN airlock_connector_events")
 	for {
-		job, done, err = terminal()
+		job, done, err := terminal()
 		if err != nil || done {
 			return job, err
 		}
 		waitCtx, cancel := context.WithDeadline(ctx, job.DeadlineAt.Time)
-		notification, err := conn.Conn().WaitForNotification(waitCtx)
+		err = sub.Wait(waitCtx)
 		cancel()
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			job, done, terminalErr := terminal()
@@ -526,9 +350,6 @@ func (s *Service) Wait(ctx context.Context, agentID, jobID uuid.UUID) (dbq.Conne
 		}
 		if err != nil {
 			return dbq.ConnectorJob{}, err
-		}
-		if notification.Payload != jobID.String() {
-			continue
 		}
 	}
 }
