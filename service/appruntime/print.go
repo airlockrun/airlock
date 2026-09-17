@@ -3,7 +3,9 @@ package appruntime
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -11,7 +13,10 @@ import (
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
+	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
+	"github.com/airlockrun/airlock/realtime"
 	runtimesvc "github.com/airlockrun/airlock/service/runtime"
+	"github.com/airlockrun/airlock/service/topicroutes"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -155,42 +160,60 @@ func (h *Service) Print(ctx context.Context, req wire.PrintRequest) error {
 			return apperr.Detail(apperr.ErrInvalidInput, "per-user topic requires a target user")
 		}
 
-		// Find subscribed conversations — all, or just the target user's.
-		var rows []pgtype.UUID
-		var err error
+		var userID pgtype.UUID
 		if req.UserID != "" {
-			uid, perr := parseUUID(req.UserID)
-			if perr != nil {
-				return apperr.Detail(apperr.ErrInvalidInput, "invalid userId")
-			}
-			rows, err = q.ListSubscribedConversationsForUser(ctx, dbq.ListSubscribedConversationsForUserParams{
-				AgentID: toPgUUID(agentID),
-				Slug:    req.Topic,
-				UserID:  toPgUUID(uid),
-			})
-		} else {
-			rows, err = q.ListSubscribedConversations(ctx, dbq.ListSubscribedConversationsParams{
-				AgentID: toPgUUID(agentID),
-				Slug:    req.Topic,
-			})
+			uid, _ := parseUUID(req.UserID)
+			userID = toPgUUID(uid)
 		}
+		rows, err := topicroutes.Resolve(ctx, h.db, topic.ID, userID)
 		if err != nil {
-			h.logger.Error("list subscribed conversations", zap.Error(err))
-			return errors.New("failed to list subscribers")
+			return err
 		}
-		for _, pgID := range rows {
-			convID, err := uuid.FromBytes(pgID.Bytes[:])
+		var failures []error
+		mirrored := make(map[pgtype.UUID]bool)
+		for _, route := range rows {
+			topic, err := q.GetTopicBySlug(ctx, dbq.GetTopicBySlugParams{AgentID: toPgUUID(agentID), Slug: req.Topic})
 			if err != nil {
+				return err
+			}
+			if topic.PerUser && req.UserID == "" {
+				return apperr.Detail(apperr.ErrInvalidInput, "per-user topic requires a target user")
+			}
+			enabled, err := q.IsTopicRouteEnabled(ctx, dbq.IsTopicRouteEnabledParams{TopicID: topic.ID, ConversationID: route.ID})
+			if err != nil {
+				return err
+			}
+			if !enabled {
 				continue
 			}
-			// ephemeral=true keeps the notification visible in the chat UI
-			// (ListMessagesByConversation returns all rows) but excludes it
-			// from the next-turn LLM context (ListSessionMessagesByConversation
-			// filters NOT ephemeral). A busy topic would otherwise pile up in
-			// the prompt over time.
+			usable, permanent, err := topicroutes.Usable(ctx, q, topic, route)
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			if !usable {
+				if !permanent {
+					failures = append(failures, fmt.Errorf("notification route %s is temporarily unavailable", pgUUID(route.ID)))
+				}
+				continue
+			}
+			// Mirror once per user, never once per route, without a durable web
+			// destination. Reconnecting clients do not replay this live event.
+			if !mirrored[route.UserID] {
+				mirrored[route.UserID] = true
+				parts, err := json.Marshal(req.Parts)
+				if err != nil {
+					return err
+				}
+				parts = runtimesvc.ResolveMediaPartsJSON(ctx, h.s3, h.logger, parts)
+				if err := h.pubsub.Publish(ctx, agentID, realtime.NewEnvelopeForUser("topic.notification", agentID.String(), pgUUID(route.UserID).String(), "", &airlockv1.NotificationEvent{AgentId: agentID.String(), PartsJson: string(parts), Source: "notification"})); err != nil {
+					h.logger.Warn("live notification mirror failed", zap.Error(err))
+				}
+			}
 			if err := runtimesvc.PostToConversation(ctx, deps, runtimesvc.PostOpts{
 				AgentID:        agentID,
-				ConversationID: convID,
+				ConversationID: pgUUID(route.ID),
+				BridgeOnly:     true,
 				RunID:          uuid.Nil,
 				Role:           "assistant",
 				Text:           textSummary,
@@ -198,9 +221,17 @@ func (h *Service) Print(ctx context.Context, req wire.PrintRequest) error {
 				Source:         "notification",
 				Ephemeral:      true,
 			}); err != nil {
-				h.logger.Error("post to conversation", zap.String("convID", convID.String()), zap.Error(err))
+				failures = append(failures, fmt.Errorf("notification route %s: %w", pgUUID(route.ID), err))
+				if errors.Is(err, topicroutes.ErrDestinationGone) {
+					// Repair is for the next publication, never this possibly
+					// partially delivered one. A new inbound message fences this mark.
+					if err := q.MarkNotificationRouteLost(ctx, dbq.MarkNotificationRouteLostParams{ID: route.ID, ObservedActivity: route.UserActivityAt}); err != nil {
+						failures = append(failures, err)
+					}
+				}
 			}
 		}
+		return errors.Join(failures...)
 	} else if req.ConversationID != "" {
 		// Direct output() — single conversation, ephemeral.
 		if err := runtimesvc.PostToConversation(ctx, deps, runtimesvc.PostOpts{
@@ -251,12 +282,9 @@ func (h *Service) TopicSubscribe(ctx context.Context, slug string, convUUID uuid
 		return apperr.Detail(apperr.ErrNotFound, "%s", "topic not found: "+slug)
 	}
 
-	if err := q.SubscribeTopic(ctx, dbq.SubscribeTopicParams{
-		TopicID:        topic.ID,
-		ConversationID: toPgUUID(convUUID),
-	}); err != nil {
+	if err := topicroutes.Set(ctx, q, topic, toPgUUID(convUUID), true); err != nil {
 		h.logger.Error("subscribe topic", zap.Error(err))
-		return errors.New("failed to subscribe")
+		return err
 	}
 
 	return tx.Commit(ctx)
@@ -292,12 +320,9 @@ func (h *Service) TopicUnsubscribe(ctx context.Context, slug string, convUUID uu
 		return apperr.Detail(apperr.ErrNotFound, "%s", "topic not found: "+slug)
 	}
 
-	if err := q.UnsubscribeTopic(ctx, dbq.UnsubscribeTopicParams{
-		TopicID:        topic.ID,
-		ConversationID: toPgUUID(convUUID),
-	}); err != nil {
+	if err := topicroutes.Set(ctx, q, topic, toPgUUID(convUUID), false); err != nil {
 		h.logger.Error("unsubscribe topic", zap.Error(err))
-		return errors.New("failed to unsubscribe")
+		return err
 	}
 
 	return tx.Commit(ctx)

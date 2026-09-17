@@ -57,7 +57,7 @@ func (s *sharedPubSub) publish(ctx context.Context, topicID uuid.UUID, env Envel
 	if topicID == uuid.Nil {
 		return errors.New("realtime: missing topic")
 	}
-	if strings.HasPrefix(env.Type, "run.") || env.Type == "notification" {
+	if strings.HasPrefix(env.Type, "run.") || env.Type == "notification" || env.Type == "topic.notification" {
 		id, err := uuid.Parse(env.UserID)
 		if err != nil || id == uuid.Nil {
 			return errors.New("realtime: private event requires a user")
@@ -224,6 +224,9 @@ func (s *sharedPubSub) replay(conn *Conn, topicID uuid.UUID) uint64 {
 		conn.SendEnvelope(Envelope{Type: "resync", TopicID: topicID.String(), Seq: uint64(row.Seq)})
 	} else {
 		for _, ev := range events {
+			if ev.Envelope.Type == "topic.notification" {
+				continue
+			}
 			if ev.Envelope.UserID != "" && ev.Envelope.UserID != conn.UserID.String() {
 				continue
 			}

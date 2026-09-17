@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/airlockrun/agentsdk"
@@ -9,6 +10,7 @@ import (
 	"github.com/airlockrun/airlock/auth"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -86,4 +88,26 @@ func (p Principal) EffectiveAgentAccessChecked(ctx context.Context, q *dbq.Queri
 		}
 	}
 	return best, true, nil
+}
+
+// EffectiveAgentAccessForStoredUser resolves access for a persisted recipient,
+// not a caller credential. Notification routing uses it to recheck the live
+// account and grants without constructing authority outside this package.
+func EffectiveAgentAccessForStoredUser(ctx context.Context, q *dbq.Queries, userID, agentID uuid.UUID) (agentsdk.Access, error) {
+	if userID == uuid.Nil || agentID == uuid.Nil {
+		return "", apperr.ErrForbidden
+	}
+	user, err := q.GetUserByID(ctx, pgtype.UUID{Bytes: userID, Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", apperr.ErrForbidden
+	}
+	if err != nil {
+		return "", err
+	}
+	role := auth.Role(user.TenantRole)
+	if user.MustChangePassword || !role.Valid() {
+		return "", apperr.ErrForbidden
+	}
+	access, _, err := UserPrincipal(userID, role).EffectiveAgentAccessChecked(ctx, q, agentID)
+	return access, err
 }

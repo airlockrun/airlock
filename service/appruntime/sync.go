@@ -424,6 +424,9 @@ func (h *Service) Sync(ctx context.Context, req wire.SyncRequest) (wire.SyncResp
 	// Upsert topics, then delete stale.
 	topicSlugs := make([]string, len(req.Topics))
 	for i, t := range req.Topics {
+		if t.Enrollment == "" {
+			t.Enrollment = wire.TopicEnrollmentDefaultOff
+		}
 		if err := q.UpsertTopic(ctx, dbq.UpsertTopicParams{
 			AgentID:     pgAgentID,
 			Slug:        t.Slug,
@@ -431,6 +434,7 @@ func (h *Service) Sync(ctx context.Context, req wire.SyncRequest) (wire.SyncResp
 			LlmHint:     t.LLMHint,
 			Access:      string(t.Access),
 			PerUser:     t.PerUser,
+			Enrollment:  string(t.Enrollment),
 		}); err != nil {
 			h.logger.Error("upsert topic failed", zap.Error(err))
 			return wire.SyncResponse{}, errors.New("failed to sync topics")

@@ -537,8 +537,12 @@ export const connectorMessages = defineMessages({
     defaultMessage: 'Full management',
     description: 'Display label for a host that permits all remote management actions.',
   },
-  'connectors.host.access.updateOnly': {
-    defaultMessage: 'Update only',
+  'connectors.host.access.manage': {
+    defaultMessage: 'Manage',
+    description: 'Host permission preset permitting connector installation, removal, updates, and rollbacks, but not remote shell requests. This is not a native-code sandbox.',
+  },
+  'connectors.host.access.updates': {
+    defaultMessage: 'Updates',
     description: 'Display label for a host that permits connector updates and rollbacks only.',
   },
   'connectors.host.access.none': {

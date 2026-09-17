@@ -2885,7 +2885,7 @@ export type HostInfo = Message<"airlock.v1.HostInfo"> & {
   architecture: string;
 
   /**
-   * full | update_only | none; reported by the host
+   * full | manage | updates | none; reported by the host
    *
    * @generated from field: string access_mode = 5;
    */

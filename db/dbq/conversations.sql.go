@@ -14,7 +14,7 @@ import (
 const createWebConversation = `-- name: CreateWebConversation :one
 INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
 VALUES ($1, $2, 'web', $3, '{}'::jsonb, '{}'::jsonb)
-RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at
 `
 
 type CreateWebConversationParams struct {
@@ -42,6 +42,8 @@ func (q *Queries) CreateWebConversation(ctx context.Context, arg CreateWebConver
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
@@ -56,7 +58,7 @@ func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getConversationByID = `-- name: GetConversationByID :one
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations WHERE id = $1
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations WHERE id = $1
 `
 
 func (q *Queries) GetConversationByID(ctx context.Context, id pgtype.UUID) (AgentConversation, error) {
@@ -75,12 +77,14 @@ func (q *Queries) GetConversationByID(ctx context.Context, id pgtype.UUID) (Agen
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
 
 const getConversationByIDAndAgent = `-- name: GetConversationByIDAndAgent :one
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE id = $1 AND agent_id = $2
 `
 
@@ -105,12 +109,14 @@ func (q *Queries) GetConversationByIDAndAgent(ctx context.Context, arg GetConver
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
 
 const getConversationByIDAndAgentForUpdate = `-- name: GetConversationByIDAndAgentForUpdate :one
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE id = $1 AND agent_id = $2
 FOR UPDATE
 `
@@ -139,12 +145,14 @@ func (q *Queries) GetConversationByIDAndAgentForUpdate(ctx context.Context, arg 
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
 
 const getConversationBySource = `-- name: GetConversationBySource :one
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE agent_id = $1 AND user_id = $2 AND source = $3
 `
 
@@ -172,16 +180,18 @@ func (q *Queries) GetConversationBySource(ctx context.Context, arg GetConversati
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
 
 const getOrCreateBridgeAuthedConversation = `-- name: GetOrCreateBridgeAuthedConversation :one
-INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
-VALUES ($1, $2, 'bridge', $3, $4, $5, '{}'::jsonb, '{}'::jsonb)
+INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings, user_activity_at)
+VALUES ($1, $2, 'bridge', $3, $4, $5, '{}'::jsonb, '{}'::jsonb, now())
 ON CONFLICT (agent_id, user_id, source, external_id, bridge_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
-    SET updated_at = now()
-RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+    SET updated_at = now(), user_activity_at = now(), notification_route_lost_at = NULL
+RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at
 `
 
 type GetOrCreateBridgeAuthedConversationParams struct {
@@ -220,12 +230,14 @@ func (q *Queries) GetOrCreateBridgeAuthedConversation(ctx context.Context, arg G
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
 
 const listAllWebConversationsByUser = `-- name: ListAllWebConversationsByUser :many
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE user_id = $1 AND source = 'web'
 ORDER BY updated_at DESC
 `
@@ -255,6 +267,8 @@ func (q *Queries) ListAllWebConversationsByUser(ctx context.Context, userID pgty
 			&i.ContextCheckpointMessageID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserActivityAt,
+			&i.NotificationRouteLostAt,
 		); err != nil {
 			return nil, err
 		}
@@ -335,7 +349,7 @@ func (q *Queries) ListConversationFeed(ctx context.Context, arg ListConversation
 }
 
 const listConversationsByAgent = `-- name: ListConversationsByAgent :many
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE agent_id = $1 AND user_id = $2 AND source IN ('web','bridge')
 ORDER BY updated_at DESC
 `
@@ -369,6 +383,8 @@ func (q *Queries) ListConversationsByAgent(ctx context.Context, arg ListConversa
 			&i.ContextCheckpointMessageID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.UserActivityAt,
+			&i.NotificationRouteLostAt,
 		); err != nil {
 			return nil, err
 		}

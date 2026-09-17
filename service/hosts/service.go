@@ -162,7 +162,7 @@ func validateInfo(info protocol.HostInfo) error {
 	if info.Architecture != "amd64" && info.Architecture != "arm64" && !(info.Platform == "linux" && info.Architecture == "armv7") {
 		return service.Detail(service.ErrInvalidInput, "invalid host architecture")
 	}
-	if info.AccessMode != protocol.RemoteAccessFull && info.AccessMode != protocol.RemoteAccessUpdateOnly && info.AccessMode != protocol.RemoteAccessNone {
+	if info.AccessMode != protocol.RemoteAccessFull && info.AccessMode != protocol.RemoteAccessManage && info.AccessMode != protocol.RemoteAccessUpdates && info.AccessMode != protocol.RemoteAccessNone {
 		return service.Detail(service.ErrInvalidInput, "invalid host access mode")
 	}
 	return nil
@@ -864,8 +864,16 @@ func timeout(value time.Duration) (time.Duration, error) {
 }
 
 func requireMode(host dbq.Host, kind string) error {
-	if host.AccessMode == "full" || host.AccessMode == "update_only" && (kind == "connector_update" || kind == "connector_rollback") {
-		return nil
+	switch kind {
+	case "shell":
+		if host.AccessMode == string(protocol.RemoteAccessFull) {
+			return nil
+		}
+	case "connector_install", "connector_update", "connector_rollback", "connector_remove":
+		if host.AccessMode == string(protocol.RemoteAccessFull) || host.AccessMode == string(protocol.RemoteAccessManage) ||
+			host.AccessMode == string(protocol.RemoteAccessUpdates) && (kind == "connector_update" || kind == "connector_rollback") {
+			return nil
+		}
 	}
 	return service.Detail(service.ErrConflict, "host reported %s local access; requested management is not allowed", host.AccessMode)
 }

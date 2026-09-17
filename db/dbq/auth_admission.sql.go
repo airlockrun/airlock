@@ -94,7 +94,7 @@ func (q *Queries) CancelBridgeSystemRun(ctx context.Context, arg CancelBridgeSys
 }
 
 const getBridgeConversation = `-- name: GetBridgeConversation :one
-SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at FROM agent_conversations
+SELECT id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at FROM agent_conversations
 WHERE agent_id = $1 AND user_id = $2 AND source = 'bridge'
   AND bridge_id = $3 AND external_id = $4
 `
@@ -127,6 +127,8 @@ func (q *Queries) GetBridgeConversation(ctx context.Context, arg GetBridgeConver
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }

@@ -13,10 +13,10 @@ RETURNING *;
 -- also a different conversation (external_id covers that axis).
 -- Upserts on idx_conversations_bridge_authed; conflict target must
 -- match the partial index's keys + predicate so Postgres infers it.
-INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings)
-VALUES (@agent_id, @user_id, 'bridge', @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb)
+INSERT INTO agent_conversations (agent_id, user_id, source, title, bridge_id, external_id, metadata, settings, user_activity_at)
+VALUES (@agent_id, @user_id, 'bridge', @title, @bridge_id, @external_id, '{}'::jsonb, '{}'::jsonb, now())
 ON CONFLICT (agent_id, user_id, source, external_id, bridge_id) WHERE user_id IS NOT NULL AND external_id IS NOT NULL DO UPDATE
-    SET updated_at = now()
+    SET updated_at = now(), user_activity_at = now(), notification_route_lost_at = NULL
 RETURNING *;
 
 -- name: ListConversationsByAgent :many

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -40,6 +41,7 @@ type PostOpts struct {
 	Parts          []wire.DisplayPart // rich content (optional)
 	Source         string             // "notification", "system", etc.
 	Ephemeral      bool               // stored for UI but excluded from LLM context
+	BridgeOnly     bool               // reject loss of a bridge route instead of emitting a web event
 	TriggerLLM     bool               // forward to agent for a response turn
 	LLMMessage     string             // message text for the LLM turn (if TriggerLLM)
 }
@@ -60,6 +62,11 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 	})
 	if err != nil {
 		return err
+	}
+	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
+		conv.ExternalID.Valid && conv.ExternalID.String != "" && deps.BridgeMgr != nil
+	if opts.BridgeOnly && !isBridge {
+		return errors.New("notification bridge route is unavailable")
 	}
 	if opts.RunID != uuid.Nil {
 		if _, err := q.GetRunByIDAndAgent(ctx, dbq.GetRunByIDAndAgentParams{
@@ -106,15 +113,13 @@ func PostToConversation(ctx context.Context, deps PostDeps, opts PostOpts) error
 	}
 
 	// Deliver to appropriate channel.
-	isBridge := conv.Source == "bridge" && conv.BridgeID.Valid &&
-		conv.ExternalID.Valid && conv.ExternalID.String != "" && deps.BridgeMgr != nil
-
 	if isBridge {
 		bridgeID := pgUUID(conv.BridgeID)
 		// Resolve S3 sources to presigned URLs for bridge delivery.
 		bridgeParts := resolveDisplayParts(ctx, deps.S3, deps.Logger, opts.Parts)
 		if err := deps.BridgeMgr.SendParts(ctx, bridgeID, conv.ExternalID.String, bridgeParts); err != nil {
 			deps.Logger.Error("bridge delivery failed", zap.Error(err))
+			return err
 		}
 	} else {
 		agentIDStr := opts.AgentID.String()

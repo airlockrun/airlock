@@ -25,7 +25,8 @@ const host = computed(() => detail.value?.host)
 const stale = computed(() => !host.value || isHostStale(host.value.lastSeenAt, now.value))
 const canManage = computed(() => hasCapability(host.value?.capabilities ?? [], 'manage'))
 const canFull = computed(() => canManage.value && !stale.value && host.value?.accessMode === 'full')
-const canUpdate = computed(() => canManage.value && !stale.value && (host.value?.accessMode === 'full' || host.value?.accessMode === 'update_only'))
+const canRemove = computed(() => canManage.value && !stale.value && (host.value?.accessMode === 'full' || host.value?.accessMode === 'manage'))
+const canUpdate = computed(() => canRemove.value || (canManage.value && !stale.value && host.value?.accessMode === 'updates'))
 const status = computed(() => host.value ? hostStatus(host.value, now.value, t) : null)
 
 const capabilityMessageIds = {
@@ -58,7 +59,8 @@ function capabilityLabel(capability: string): string {
 
 function accessModeLabel(mode: string): string {
   if (mode === 'full') return t('connectors.host.access.full')
-  if (mode === 'update_only') return t('connectors.host.access.updateOnly')
+  if (mode === 'manage') return t('connectors.host.access.manage')
+  if (mode === 'updates') return t('connectors.host.access.updates')
   if (mode === 'none') return t('connectors.host.access.none')
   return mode
 }
@@ -129,7 +131,7 @@ onMounted(load)
     <template v-else-if="host">
       <div class="heading">
         <div><h1>{{ host.name }}</h1><p>{{ host.platform }} / {{ host.architecture }} · airlock-host {{ host.version }}</p></div>
-        <div class="heading-tags"><Tag v-if="status" :value="status.label" :severity="status.severity" /><Tag :value="accessModeLabel(host.accessMode)" :severity="host.accessMode === 'full' ? 'success' : host.accessMode === 'update_only' ? 'warn' : 'secondary'" /></div>
+        <div class="heading-tags"><Tag v-if="status" :value="status.label" :severity="status.severity" /><Tag :value="accessModeLabel(host.accessMode)" :severity="host.accessMode === 'full' ? 'success' : host.accessMode === 'updates' ? 'warn' : 'secondary'" /></div>
       </div>
       <div class="host-access">
         <span><small>{{ t('connectors.host.detail.owner') }}</small><strong>{{ host.ownerName || host.ownerUserId }}</strong></span>
@@ -146,7 +148,7 @@ onMounted(load)
             <Column field="displayName" :header="t('connectors.host.detail.connector')" />
             <Column field="artifactVersion" :header="t('connectors.host.detail.version')" />
             <Column :header="t('connectors.host.detail.readiness')"><template #body="{ data }"><Tag :value="connectorReadiness(data.readiness, t).label" :severity="connectorReadiness(data.readiness, t).severity" /></template></Column>
-             <Column header=""><template #body="{ data }"><div class="row-actions"><Button :label="t('connectors.host.detail.rollback')" size="small" text :disabled="!canUpdate" @click="rollback(data)" /><Button :label="t('connectors.host.detail.remove')" size="small" severity="danger" text :disabled="!canFull" @click="remove(data)" /></div></template></Column>
+              <Column header=""><template #body="{ data }"><div class="row-actions"><Button :label="t('connectors.host.detail.rollback')" size="small" text :disabled="!canUpdate" @click="rollback(data)" /><Button :label="t('connectors.host.detail.remove')" size="small" severity="danger" text :disabled="!canRemove" @click="remove(data)" /></div></template></Column>
           </DataTable>
         </template>
       </Card>

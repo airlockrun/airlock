@@ -280,7 +280,9 @@ func (h *Hub) BroadcastToTopic(topicID uuid.UUID, env Envelope) {
 		h.topicDroppedUpTo[topicID] = buf[0].seq
 		buf = buf[1:]
 	}
-	h.topicBuffers[topicID] = append(buf, bufferedEvent{seq: s, data: data, userID: env.UserID})
+	if env.Type != "topic.notification" {
+		h.topicBuffers[topicID] = append(buf, bufferedEvent{seq: s, data: data, userID: env.UserID})
+	}
 
 	for _, c := range h.topics[topicID] {
 		if env.UserID != "" && env.UserID != c.UserID.String() {

@@ -801,7 +801,7 @@ message HostInfo {
   string name = 2;
   string platform = 3;
   string architecture = 4;
-  string access_mode = 5; // full | update_only | none; reported by the host
+  string access_mode = 5; // full | manage | updates | none; reported by the host
   string version = 6;
   int32 protocol_version = 7;
   string lifecycle = 8;

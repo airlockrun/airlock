@@ -22,6 +22,7 @@ import (
 	"github.com/airlockrun/airlock/service"
 	"github.com/airlockrun/airlock/service/bridgeevents"
 	"github.com/airlockrun/airlock/service/execution"
+	"github.com/airlockrun/airlock/service/topicroutes"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/model"
@@ -126,6 +127,17 @@ func (p *PromptProxy) HandleMessage(
 			return "", fmt.Errorf("get/create conversation: %w", err)
 		}
 		conversationID = conv.ID
+		topics, err := q.ListTopicsByAgent(ctx, conv.AgentID)
+		if err != nil {
+			close(events)
+			return "", err
+		}
+		for _, topic := range topics {
+			if _, err := topicroutes.Resolve(ctx, p.db, topic.ID, conv.UserID); err != nil {
+				close(events)
+				return "", err
+			}
+		}
 	}
 
 	// Wrap a referenced message (reply / forward) into the user prompt so

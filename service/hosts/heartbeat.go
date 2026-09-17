@@ -12,7 +12,7 @@ import (
 // Heartbeat updates host liveness and local policy independently of inventory.
 func (s *Service) Heartbeat(ctx context.Context, hostID uuid.UUID, mode protocol.RemoteAccessMode) error {
 	switch mode {
-	case protocol.RemoteAccessFull, protocol.RemoteAccessUpdateOnly, protocol.RemoteAccessNone:
+	case protocol.RemoteAccessFull, protocol.RemoteAccessManage, protocol.RemoteAccessUpdates, protocol.RemoteAccessNone:
 	default:
 		return service.ErrInvalidInput
 	}

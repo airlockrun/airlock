@@ -64,7 +64,7 @@ const choices = computed<HostChoice[]>(() => hosts.value.map((host) => {
     : existing.readiness !== 'ready'
       ? 'connectors.install.host.needsAttention'
       : 'connectors.install.host.existing', { name: existing.displayName })
-  else if (host.accessMode !== 'full') reason = host.accessMode === 'update_only'
+  else if (host.accessMode !== 'full' && host.accessMode !== 'manage') reason = host.accessMode === 'updates'
     ? t('connectors.install.host.updatesOnly')
     : t('connectors.install.host.managementDisabled')
   else if (isHostStale(host.lastSeenAt, now.value)) reason = t('connectors.install.host.stale')
