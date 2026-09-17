@@ -14,6 +14,7 @@ import (
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/airlock/db/dbq"
+	"github.com/airlockrun/airlock/service/topicroutes"
 	"go.uber.org/zap"
 )
 
@@ -778,7 +779,9 @@ func (d *TelegramDriver) SendParts(ctx context.Context, token string, chatID int
 			// Send as a Rich Message so markdown (tables, **bold**, etc.)
 			// renders natively. Mirrors the SendStream path. Media parts below
 			// still upload via sendPhoto/sendDocument.
-			_, _ = d.sendRichMessage(ctx, token, chatID, textBuf.String(), nil)
+			if _, err := d.sendRichMessage(ctx, token, chatID, textBuf.String(), nil); err != nil {
+				lastErr = err
+			}
 			textBuf.Reset()
 		}
 	}
@@ -1081,7 +1084,7 @@ func (d *TelegramDriver) sendMultipart(ctx context.Context, token, method string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("telegram %s: status %d: %s", method, resp.StatusCode, string(body))
+		return telegramResponseError(method, resp.StatusCode, body)
 	}
 	return nil
 }
@@ -1166,7 +1169,7 @@ func (d *TelegramDriver) callTelegramJSON(ctx context.Context, token, method str
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("telegram %s: status %d: %s", method, resp.StatusCode, string(respBody))
+		return telegramResponseError(method, resp.StatusCode, respBody)
 	}
 
 	if result != nil {
@@ -1179,6 +1182,22 @@ func (d *TelegramDriver) callTelegramJSON(ctx context.Context, token, method str
 }
 
 // --- Telegram types ---
+
+func telegramResponseError(method string, status int, body []byte) error {
+	err := fmt.Errorf("telegram %s: status %d: %s", method, status, body)
+	var response struct {
+		Code        int    `json:"error_code"`
+		Description string `json:"description"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Code != status {
+		return err
+	}
+	if status == http.StatusForbidden && (response.Description == "Forbidden: bot was blocked by the user" || response.Description == "Forbidden: user is deactivated") ||
+		status == http.StatusBadRequest && response.Description == "Bad Request: chat not found" {
+		return fmt.Errorf("%v: %w", err, topicroutes.ErrDestinationGone)
+	}
+	return err
+}
 
 type telegramConfig struct {
 	Offset int64 `json:"offset"`

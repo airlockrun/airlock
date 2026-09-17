@@ -51,7 +51,8 @@ function statusLabel(status: string): string {
 
 function accessModeLabel(mode: string): string {
   if (mode === 'full') return t('connectors.host.access.full')
-  if (mode === 'update_only') return t('connectors.host.access.updateOnly')
+  if (mode === 'manage') return t('connectors.host.access.manage')
+  if (mode === 'updates') return t('connectors.host.access.updates')
   if (mode === 'none') return t('connectors.host.access.none')
   return mode
 }

@@ -241,7 +241,7 @@ func (q *Queries) CreateAgentTaskCall(ctx context.Context, arg CreateAgentTaskCa
 
 const createAgentTaskConversation = `-- name: CreateAgentTaskConversation :one
 INSERT INTO agent_conversations (agent_id, user_id, source, title, metadata, settings)
-VALUES ($1, NULL, 'application', $2, '{}'::jsonb, '{}'::jsonb) RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+VALUES ($1, NULL, 'application', $2, '{}'::jsonb, '{}'::jsonb) RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at
 `
 
 type CreateAgentTaskConversationParams struct {
@@ -265,6 +265,8 @@ func (q *Queries) CreateAgentTaskConversation(ctx context.Context, arg CreateAge
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }

@@ -358,6 +358,19 @@ export const useChatStore = defineStore('chat', () => {
       onRunMessage('run.suspended', () => {
         // Run suspended (e.g., awaiting approval) — keep state as-is.
       }),
+      ws.onMessage('topic.notification', (payload, env) => {
+        if (!env || env.topicId !== boundAgentId.value || !conversationId.value) return
+        const ev = tryFromJson<NotificationEvent>(NotificationEventSchema, payload)
+        if (!ev || ev.agentId !== boundAgentId.value || ev.conversationId) return
+        eventRevision++
+        const msg = buildNotificationMessage(ev.partsJson, 'notification')
+        if (currentRunId.value || sending.value) {
+          pendingNotifications.push(msg)
+        } else {
+          enrichNotification(msg)
+          messages.value.push(msg)
+        }
+      }),
       onRunMessage('notification', (payload) => {
         const ev = tryFromJson<NotificationEvent>(NotificationEventSchema, payload)
         if (!ev || !ev.conversationId) return
@@ -759,6 +772,8 @@ export const useChatStore = defineStore('chat', () => {
   async function loadConversation(agentId: string, convId?: string) {
     reconciliation++
     needsSnapshot = false
+    conversationId.value = null
+    pendingNotifications.length = 0
     boundAgentId.value = agentId
     const web = await refreshConversations(agentId)
     if (convId && web.some(c => c.id === convId)) {
@@ -1025,6 +1040,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function cleanup() {
+    pendingNotifications.length = 0
     for (const unsub of unsubscribers) unsub()
     unsubscribers.length = 0
     boundAgentId.value = null

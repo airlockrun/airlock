@@ -33,7 +33,8 @@ The host reports one mode on every sync and heartbeat:
 | Mode | Shell | Install | Update | Rollback | Remove | Connector commands |
 | --- | --- | --- | --- | --- | --- | --- |
 | `full` | yes | yes | yes | yes | yes | yes |
-| `update_only` | no | no | yes | yes | no | yes |
+| `manage` | no | yes | yes | yes | yes | yes |
+| `updates` | no | no | yes | yes | no | yes |
 | `none` | no | no | no | no | no | yes |
 
 The mode is host policy and cannot be changed from Airlock. Management admission
@@ -41,7 +42,22 @@ and claim require a heartbeat within the same two-minute freshness window used
 for hosted connectors. A queued management job is rechecked against the current
 mode and host artifact platform when claimed. Connector domain
 commands are not local-management operations and remain available in every
-mode.
+mode. Resource `manage` authorization is a separate requirement; this local
+policy does not grant resource permissions. Admission, database claim, and host
+execution enforce the same exact operation allowlist. Missing and unknown modes
+are rejected rather than defaulted.
+
+### Rollout
+
+Stop incompatible Airlock replicas and policy writers before applying
+`010_host_contract_singleton.sql`. Deploy matching Airlock, SDK, and host builds before
+accepting sessions. Migration 010 preserves the privileges of persisted host
+policies and enrollment snapshots. Its Down fails while any host, including
+inactive hosts, or enrollment snapshot uses `manage`. Explicitly configure those
+hosts to a supported mode and clear their enrollment sessions before retrying.
+Stop incompatible policy writers before downgrading. Queued shell work cannot
+be claimed while the reported mode is `manage`; connector lifecycle work remains
+claimable. Connector command runtime authorization is independent of this mode.
 
 ## Management Work
 

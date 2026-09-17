@@ -16,6 +16,7 @@ import (
 	"github.com/airlockrun/airlock/db/dbq"
 	agentstorage "github.com/airlockrun/airlock/service/agentstorage"
 	"github.com/airlockrun/airlock/service/systemchat"
+	"github.com/airlockrun/airlock/service/topicroutes"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
 	"github.com/google/uuid"
@@ -87,11 +88,7 @@ func (h *Service) InvokePlatform(ctx context.Context, scope wire.RuntimeContext,
 		if err != nil {
 			return tool.Result{}, err
 		}
-		if definition.Path.CanonicalOperation() == "subscribe" {
-			err = q.SubscribeTopic(ctx, dbq.SubscribeTopicParams{ConversationID: toPgUUID(convID), TopicID: topic.ID})
-		} else {
-			err = q.UnsubscribeTopic(ctx, dbq.UnsubscribeTopicParams{ConversationID: toPgUUID(convID), TopicID: topic.ID})
-		}
+		err = topicroutes.Set(ctx, q, topic, toPgUUID(convID), definition.Path.CanonicalOperation() == "subscribe")
 		return encode(map[string]bool{"ok": err == nil}, err)
 	case capability.Air:
 		switch definition.Path.CanonicalOperation() {

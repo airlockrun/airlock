@@ -11,6 +11,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addAutomaticTopicRoute = `-- name: AddAutomaticTopicRoute :exec
+INSERT INTO topic_subscriptions (topic_id, conversation_id, user_id, automatic)
+VALUES ($1, $2, $3, true)
+`
+
+type AddAutomaticTopicRouteParams struct {
+	TopicID        pgtype.UUID `json:"topic_id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	UserID         pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) AddAutomaticTopicRoute(ctx context.Context, arg AddAutomaticTopicRouteParams) error {
+	_, err := q.db.Exec(ctx, addAutomaticTopicRoute, arg.TopicID, arg.ConversationID, arg.UserID)
+	return err
+}
+
+const deleteTopicRoute = `-- name: DeleteTopicRoute :exec
+DELETE FROM topic_subscriptions WHERE topic_id = $1 AND conversation_id = $2
+`
+
+type DeleteTopicRouteParams struct {
+	TopicID        pgtype.UUID `json:"topic_id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+}
+
+func (q *Queries) DeleteTopicRoute(ctx context.Context, arg DeleteTopicRouteParams) error {
+	_, err := q.db.Exec(ctx, deleteTopicRoute, arg.TopicID, arg.ConversationID)
+	return err
+}
+
 const deleteTopicsByAgentExcept = `-- name: DeleteTopicsByAgentExcept :exec
 DELETE FROM agent_topics
 WHERE agent_id = $1 AND slug != ALL($2::text[])
@@ -27,7 +57,7 @@ func (q *Queries) DeleteTopicsByAgentExcept(ctx context.Context, arg DeleteTopic
 }
 
 const getTopicBySlug = `-- name: GetTopicBySlug :one
-SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user FROM agent_topics WHERE agent_id = $1 AND slug = $2
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user, enrollment FROM agent_topics WHERE agent_id = $1 AND slug = $2
 `
 
 type GetTopicBySlugParams struct {
@@ -48,115 +78,152 @@ func (q *Queries) GetTopicBySlug(ctx context.Context, arg GetTopicBySlugParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.PerUser,
+		&i.Enrollment,
 	)
 	return i, err
 }
 
-const listSubscribedConversations = `-- name: ListSubscribedConversations :many
-SELECT ts.conversation_id
-FROM topic_subscriptions ts
-JOIN agent_topics at ON at.id = ts.topic_id
-JOIN agent_conversations c ON c.id = ts.conversation_id
-WHERE at.agent_id = $1 AND at.slug = $2 AND c.agent_id = $1
+const isTopicRouteEnabled = `-- name: IsTopicRouteEnabled :one
+SELECT EXISTS (
+    SELECT 1 FROM topic_subscriptions s JOIN agent_topics t ON t.id = s.topic_id
+    LEFT JOIN topic_preferences p ON p.topic_id = t.id AND p.user_id = s.user_id
+    WHERE s.topic_id = $1 AND s.conversation_id = $2
+      AND COALESCE(p.enabled, t.enrollment = 'default_on')
+)::boolean
 `
 
-type ListSubscribedConversationsParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-}
-
-func (q *Queries) ListSubscribedConversations(ctx context.Context, arg ListSubscribedConversationsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listSubscribedConversations, arg.AgentID, arg.Slug)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var conversation_id pgtype.UUID
-		if err := rows.Scan(&conversation_id); err != nil {
-			return nil, err
-		}
-		items = append(items, conversation_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listSubscribedConversationsForUser = `-- name: ListSubscribedConversationsForUser :many
-SELECT ts.conversation_id
-FROM topic_subscriptions ts
-JOIN agent_topics at ON at.id = ts.topic_id
-JOIN agent_conversations c ON c.id = ts.conversation_id
-WHERE at.agent_id = $1 AND at.slug = $2
-  AND c.agent_id = $1 AND c.user_id = $3
-`
-
-type ListSubscribedConversationsForUserParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Slug    string      `json:"slug"`
-	UserID  pgtype.UUID `json:"user_id"`
-}
-
-func (q *Queries) ListSubscribedConversationsForUser(ctx context.Context, arg ListSubscribedConversationsForUserParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listSubscribedConversationsForUser, arg.AgentID, arg.Slug, arg.UserID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var conversation_id pgtype.UUID
-		if err := rows.Scan(&conversation_id); err != nil {
-			return nil, err
-		}
-		items = append(items, conversation_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTopicSubscriptions = `-- name: ListTopicSubscriptions :many
-SELECT ts.id, ts.topic_id, ts.conversation_id, ts.created_at, at.slug as topic_slug, at.description as topic_description
-FROM topic_subscriptions ts
-JOIN agent_topics at ON at.id = ts.topic_id
-WHERE at.agent_id = $1 AND ts.conversation_id = $2
-`
-
-type ListTopicSubscriptionsParams struct {
-	AgentID        pgtype.UUID `json:"agent_id"`
+type IsTopicRouteEnabledParams struct {
+	TopicID        pgtype.UUID `json:"topic_id"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
 }
 
-type ListTopicSubscriptionsRow struct {
-	ID               pgtype.UUID        `json:"id"`
-	TopicID          pgtype.UUID        `json:"topic_id"`
-	ConversationID   pgtype.UUID        `json:"conversation_id"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	TopicSlug        string             `json:"topic_slug"`
-	TopicDescription string             `json:"topic_description"`
+func (q *Queries) IsTopicRouteEnabled(ctx context.Context, arg IsTopicRouteEnabledParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isTopicRouteEnabled, arg.TopicID, arg.ConversationID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
-func (q *Queries) ListTopicSubscriptions(ctx context.Context, arg ListTopicSubscriptionsParams) ([]ListTopicSubscriptionsRow, error) {
-	rows, err := q.db.Query(ctx, listTopicSubscriptions, arg.AgentID, arg.ConversationID)
+const listEffectiveTopicPreferences = `-- name: ListEffectiveTopicPreferences :many
+SELECT t.id, t.agent_id, t.slug, t.description, t.llm_hint, t.access, t.created_at, t.updated_at, t.per_user, t.enrollment, COALESCE(p.enabled, t.enrollment = 'default_on')::boolean AS enabled
+FROM agent_topics t LEFT JOIN topic_preferences p ON p.topic_id = t.id AND p.user_id = $1
+WHERE t.agent_id = $2
+`
+
+type ListEffectiveTopicPreferencesParams struct {
+	UserID  pgtype.UUID `json:"user_id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+type ListEffectiveTopicPreferencesRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Slug        string             `json:"slug"`
+	Description string             `json:"description"`
+	LlmHint     string             `json:"llm_hint"`
+	Access      string             `json:"access"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	PerUser     bool               `json:"per_user"`
+	Enrollment  string             `json:"enrollment"`
+	Enabled     bool               `json:"enabled"`
+}
+
+func (q *Queries) ListEffectiveTopicPreferences(ctx context.Context, arg ListEffectiveTopicPreferencesParams) ([]ListEffectiveTopicPreferencesRow, error) {
+	rows, err := q.db.Query(ctx, listEffectiveTopicPreferences, arg.UserID, arg.AgentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListTopicSubscriptionsRow{}
+	items := []ListEffectiveTopicPreferencesRow{}
 	for rows.Next() {
-		var i ListTopicSubscriptionsRow
+		var i ListEffectiveTopicPreferencesRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.TopicID,
-			&i.ConversationID,
+			&i.AgentID,
+			&i.Slug,
+			&i.Description,
+			&i.LlmHint,
+			&i.Access,
 			&i.CreatedAt,
-			&i.TopicSlug,
-			&i.TopicDescription,
+			&i.UpdatedAt,
+			&i.PerUser,
+			&i.Enrollment,
+			&i.Enabled,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationCandidates = `-- name: ListNotificationCandidates :many
+SELECT c.id, c.agent_id, c.bridge_id, c.user_id, c.source, c.external_id, c.title, c.metadata, c.settings, c.context_checkpoint_message_id, c.created_at, c.updated_at, c.user_activity_at, c.notification_route_lost_at, COALESCE(s.automatic, false)::boolean AS automatic,
+       (s.id IS NOT NULL)::boolean AS routed
+FROM agent_conversations c
+JOIN agent_topics t ON t.agent_id = c.agent_id
+LEFT JOIN topic_preferences p ON p.topic_id = t.id AND p.user_id = c.user_id
+LEFT JOIN topic_subscriptions s ON s.topic_id = t.id AND s.conversation_id = c.id
+WHERE t.id = $1 AND c.source = 'bridge' AND c.user_id IS NOT NULL
+  AND COALESCE(p.enabled, t.enrollment = 'default_on')
+  AND ($2::uuid IS NULL OR c.user_id = $2)
+ORDER BY c.user_id, (s.id IS NOT NULL) DESC, c.user_activity_at DESC NULLS LAST, c.id
+`
+
+type ListNotificationCandidatesParams struct {
+	TopicID pgtype.UUID `json:"topic_id"`
+	UserID  pgtype.UUID `json:"user_id"`
+}
+
+type ListNotificationCandidatesRow struct {
+	ID                         pgtype.UUID        `json:"id"`
+	AgentID                    pgtype.UUID        `json:"agent_id"`
+	BridgeID                   pgtype.UUID        `json:"bridge_id"`
+	UserID                     pgtype.UUID        `json:"user_id"`
+	Source                     string             `json:"source"`
+	ExternalID                 pgtype.Text        `json:"external_id"`
+	Title                      string             `json:"title"`
+	Metadata                   []byte             `json:"metadata"`
+	Settings                   []byte             `json:"settings"`
+	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	UserActivityAt             pgtype.Timestamptz `json:"user_activity_at"`
+	NotificationRouteLostAt    pgtype.Timestamptz `json:"notification_route_lost_at"`
+	Automatic                  bool               `json:"automatic"`
+	Routed                     bool               `json:"routed"`
+}
+
+func (q *Queries) ListNotificationCandidates(ctx context.Context, arg ListNotificationCandidatesParams) ([]ListNotificationCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationCandidates, arg.TopicID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNotificationCandidatesRow{}
+	for rows.Next() {
+		var i ListNotificationCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.BridgeID,
+			&i.UserID,
+			&i.Source,
+			&i.ExternalID,
+			&i.Title,
+			&i.Metadata,
+			&i.Settings,
+			&i.ContextCheckpointMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.UserActivityAt,
+			&i.NotificationRouteLostAt,
+			&i.Automatic,
+			&i.Routed,
 		); err != nil {
 			return nil, err
 		}
@@ -169,7 +236,7 @@ func (q *Queries) ListTopicSubscriptions(ctx context.Context, arg ListTopicSubsc
 }
 
 const listTopicsByAgent = `-- name: ListTopicsByAgent :many
-SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user FROM agent_topics WHERE agent_id = $1
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user, enrollment FROM agent_topics WHERE agent_id = $1
 `
 
 func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentTopic, error) {
@@ -191,6 +258,7 @@ func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PerUser,
+			&i.Enrollment,
 		); err != nil {
 			return nil, err
 		}
@@ -202,10 +270,45 @@ func (q *Queries) ListTopicsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 	return items, nil
 }
 
+const lockNotificationTopic = `-- name: LockNotificationTopic :one
+SELECT id, agent_id, slug, description, llm_hint, access, created_at, updated_at, per_user, enrollment FROM agent_topics WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockNotificationTopic(ctx context.Context, id pgtype.UUID) (AgentTopic, error) {
+	row := q.db.QueryRow(ctx, lockNotificationTopic, id)
+	var i AgentTopic
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Slug,
+		&i.Description,
+		&i.LlmHint,
+		&i.Access,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PerUser,
+		&i.Enrollment,
+	)
+	return i, err
+}
+
+const markNotificationRouteLost = `-- name: MarkNotificationRouteLost :exec
+UPDATE agent_conversations SET notification_route_lost_at = now()
+WHERE id = $1 AND user_activity_at IS NOT DISTINCT FROM $2::timestamptz
+`
+
+type MarkNotificationRouteLostParams struct {
+	ID               pgtype.UUID        `json:"id"`
+	ObservedActivity pgtype.Timestamptz `json:"observed_activity"`
+}
+
+func (q *Queries) MarkNotificationRouteLost(ctx context.Context, arg MarkNotificationRouteLostParams) error {
+	_, err := q.db.Exec(ctx, markNotificationRouteLost, arg.ID, arg.ObservedActivity)
+	return err
+}
+
 const subscribeTopic = `-- name: SubscribeTopic :exec
-INSERT INTO topic_subscriptions (topic_id, conversation_id)
-VALUES ($1, $2)
-ON CONFLICT DO NOTHING
+SELECT set_topic_subscription($1::uuid, $2::uuid, true)
 `
 
 type SubscribeTopicParams struct {
@@ -219,8 +322,7 @@ func (q *Queries) SubscribeTopic(ctx context.Context, arg SubscribeTopicParams) 
 }
 
 const unsubscribeTopic = `-- name: UnsubscribeTopic :exec
-DELETE FROM topic_subscriptions
-WHERE topic_id = $1 AND conversation_id = $2
+SELECT set_topic_subscription($1::uuid, $2::uuid, false)
 `
 
 type UnsubscribeTopicParams struct {
@@ -234,13 +336,14 @@ func (q *Queries) UnsubscribeTopic(ctx context.Context, arg UnsubscribeTopicPara
 }
 
 const upsertTopic = `-- name: UpsertTopic :exec
-INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access, per_user)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO agent_topics (agent_id, slug, description, llm_hint, access, per_user, enrollment)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (agent_id, slug) DO UPDATE SET
     description = EXCLUDED.description,
     llm_hint = EXCLUDED.llm_hint,
     access = EXCLUDED.access,
     per_user = EXCLUDED.per_user,
+    enrollment = EXCLUDED.enrollment,
     updated_at = now()
 `
 
@@ -251,6 +354,7 @@ type UpsertTopicParams struct {
 	LlmHint     string      `json:"llm_hint"`
 	Access      string      `json:"access"`
 	PerUser     bool        `json:"per_user"`
+	Enrollment  string      `json:"enrollment"`
 }
 
 func (q *Queries) UpsertTopic(ctx context.Context, arg UpsertTopicParams) error {
@@ -261,6 +365,7 @@ func (q *Queries) UpsertTopic(ctx context.Context, arg UpsertTopicParams) error 
 		arg.LlmHint,
 		arg.Access,
 		arg.PerUser,
+		arg.Enrollment,
 	)
 	return err
 }

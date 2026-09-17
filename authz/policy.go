@@ -35,6 +35,7 @@ type Requirement struct {
 type Action string
 
 const AppRuntime Action = "app.runtime"
+const AgentTopic Action = "agent.topic"
 
 const (
 	// Agent axis — member (AccessUser) suffices.
@@ -135,6 +136,7 @@ const (
 // entry (fail loud) so a new action can't silently default to "allowed".
 var policy = map[Action]Requirement{
 	AppRuntime:         {Axis: AxisApp},
+	AgentTopic:         {Axis: AxisAgent, Agent: agentsdk.AccessPublic},
 	AgentGet:           {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentUpdate:        {Axis: AxisAgent, Agent: agentsdk.AccessUser},
 	AgentLifecycle:     {Axis: AxisAgent, Agent: agentsdk.AccessUser},

@@ -19,6 +19,7 @@ import (
 	"github.com/airlockrun/airlock/db"
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service"
+	"github.com/airlockrun/airlock/service/topicroutes"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -399,7 +400,7 @@ func (s *Service) OwnedConversation(ctx context.Context, p authz.Principal, conv
 	return conv, nil
 }
 
-// Topic carries one topic + this conversation's subscription state.
+// Topic carries one topic and the conversation owner's effective enrollment.
 type Topic struct {
 	ID          uuid.UUID
 	Slug        string
@@ -407,40 +408,36 @@ type Topic struct {
 	Subscribed  bool
 }
 
-// ListTopics returns the agent's topics with this conversation's
-// subscription flag set. Caller must have already passed the
+// ListTopics returns eligible topics with effective enrollment for the
+// conversation owner. Caller must have already passed the
 // OwnedConversation gate.
 func (s *Service) ListTopics(ctx context.Context, conv dbq.AgentConversation) ([]Topic, error) {
 	q := dbq.New(s.db.Pool())
-	topics, err := q.ListTopicsByAgent(ctx, conv.AgentID)
+	topics, err := q.ListEffectiveTopicPreferences(ctx, dbq.ListEffectiveTopicPreferencesParams{AgentID: conv.AgentID, UserID: conv.UserID})
 	if err != nil {
 		s.logger.Error("list topics", zap.Error(err))
 		return nil, err
 	}
-	subs, err := q.ListTopicSubscriptions(ctx, dbq.ListTopicSubscriptionsParams{
-		AgentID: conv.AgentID, ConversationID: conv.ID,
-	})
-	if err != nil {
-		s.logger.Error("list topic subscriptions", zap.Error(err))
-		return nil, err
-	}
-	subscribed := make(map[string]bool, len(subs))
-	for _, sub := range subs {
-		subscribed[sub.TopicSlug] = true
-	}
-	out := make([]Topic, len(topics))
-	for i, t := range topics {
-		out[i] = Topic{
+	out := make([]Topic, 0, len(topics))
+	for _, t := range topics {
+		eligible, err := topicroutes.Eligible(ctx, q, dbq.AgentTopic{AgentID: t.AgentID, Access: t.Access}, conv.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			continue
+		}
+		out = append(out, Topic{
 			ID:          uuid.UUID(t.ID.Bytes),
 			Slug:        t.Slug,
 			Description: t.Description,
-			Subscribed:  subscribed[t.Slug],
-		}
+			Subscribed:  t.Enabled,
+		})
 	}
 	return out, nil
 }
 
-// SubscribeTopic attaches the conversation to a topic. ErrNotFound for
+// SubscribeTopic enables enrollment and adds an explicit bridge route. ErrNotFound for
 // an unknown slug. Caller has already passed the OwnedConversation gate.
 func (s *Service) SubscribeTopic(ctx context.Context, conv dbq.AgentConversation, slug string) error {
 	if slug == "" {
@@ -451,14 +448,15 @@ func (s *Service) SubscribeTopic(ctx context.Context, conv dbq.AgentConversation
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := q.SubscribeTopic(ctx, dbq.SubscribeTopicParams{TopicID: topic.ID, ConversationID: conv.ID}); err != nil {
+	if err := topicroutes.Set(ctx, q, topic, conv.ID, true); err != nil {
 		s.logger.Error("subscribe topic", zap.Error(err))
 		return err
 	}
 	return nil
 }
 
-// UnsubscribeTopic detaches the conversation from a topic.
+// UnsubscribeTopic removes a bridge route, disabling enrollment when none
+// remain. Web conversations disable enrollment globally without being routes.
 func (s *Service) UnsubscribeTopic(ctx context.Context, conv dbq.AgentConversation, slug string) error {
 	if slug == "" {
 		return service.Detail(service.ErrInvalidInput, "topic slug is required")
@@ -468,7 +466,7 @@ func (s *Service) UnsubscribeTopic(ctx context.Context, conv dbq.AgentConversati
 	if err != nil {
 		return service.ErrNotFound
 	}
-	if err := q.UnsubscribeTopic(ctx, dbq.UnsubscribeTopicParams{TopicID: topic.ID, ConversationID: conv.ID}); err != nil {
+	if err := topicroutes.Set(ctx, q, topic, conv.ID, false); err != nil {
 		s.logger.Error("unsubscribe topic", zap.Error(err))
 		return err
 	}

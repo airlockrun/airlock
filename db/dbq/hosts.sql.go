@@ -349,7 +349,9 @@ WITH host_claim_lock AS MATERIALIZED (
           SELECT 1 FROM connector_resources connector
           WHERE connector.id = job.connector_id AND connector.host_id = job.host_id AND connector.lifecycle = 'active'
       ))
-      AND (host.access_mode = 'full' OR (host.access_mode = 'update_only' AND job.kind IN ('connector_update', 'connector_rollback')))
+      AND ((host.access_mode = 'full' AND job.kind = 'shell')
+        OR (host.access_mode IN ('full', 'manage') AND job.kind IN ('connector_install', 'connector_update', 'connector_rollback', 'connector_remove'))
+        OR (host.access_mode = 'updates' AND job.kind IN ('connector_update', 'connector_rollback')))
       AND (job.artifact_file_id IS NULL OR EXISTS (
           SELECT 1 FROM connector_artifact_files artifact_file
           WHERE artifact_file.id = job.artifact_file_id

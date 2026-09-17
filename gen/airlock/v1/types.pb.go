@@ -5079,7 +5079,7 @@ type HostInfo struct {
 	Name            string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Platform        string                 `protobuf:"bytes,3,opt,name=platform,proto3" json:"platform,omitempty"`
 	Architecture    string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`
-	AccessMode      string                 `protobuf:"bytes,5,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"` // full | update_only | none; reported by the host
+	AccessMode      string                 `protobuf:"bytes,5,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"` // full | manage | updates | none; reported by the host
 	Version         string                 `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
 	ProtocolVersion int32                  `protobuf:"varint,7,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	Lifecycle       string                 `protobuf:"bytes,8,opt,name=lifecycle,proto3" json:"lifecycle,omitempty"`

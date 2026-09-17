@@ -125,6 +125,8 @@ type AgentConversation struct {
 	ContextCheckpointMessageID pgtype.UUID        `json:"context_checkpoint_message_id"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	UserActivityAt             pgtype.Timestamptz `json:"user_activity_at"`
+	NotificationRouteLostAt    pgtype.Timestamptz `json:"notification_route_lost_at"`
 }
 
 type AgentDirectory struct {
@@ -454,6 +456,7 @@ type AgentTopic struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	PerUser     bool               `json:"per_user"`
+	Enrollment  string             `json:"enrollment"`
 }
 
 type AgentWebhook struct {
@@ -1379,11 +1382,19 @@ type Tenant struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type TopicPreference struct {
+	TopicID pgtype.UUID `json:"topic_id"`
+	UserID  pgtype.UUID `json:"user_id"`
+	Enabled bool        `json:"enabled"`
+}
+
 type TopicSubscription struct {
 	ID             pgtype.UUID        `json:"id"`
 	TopicID        pgtype.UUID        `json:"topic_id"`
 	ConversationID pgtype.UUID        `json:"conversation_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Automatic      bool               `json:"automatic"`
 }
 
 type User struct {

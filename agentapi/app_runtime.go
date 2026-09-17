@@ -49,6 +49,15 @@ func readAppJSON(r *http.Request, v any) error {
 	return nil
 }
 
+func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	result, err := h.appService().ListUsers(r.Context())
+	if err != nil {
+		h.appError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	var req wire.SyncRequest
 	if err := readAppJSON(r, &req); err != nil {

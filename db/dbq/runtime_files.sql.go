@@ -13,7 +13,7 @@ import (
 
 const createAnonymousToolConversation = `-- name: CreateAnonymousToolConversation :one
 INSERT INTO agent_conversations(agent_id,user_id,source,title,metadata,settings)
-VALUES ($1,NULL,'mcp-tool',$2,'{}','{}') RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at
+VALUES ($1,NULL,'mcp-tool',$2,'{}','{}') RETURNING id, agent_id, bridge_id, user_id, source, external_id, title, metadata, settings, context_checkpoint_message_id, created_at, updated_at, user_activity_at, notification_route_lost_at
 `
 
 type CreateAnonymousToolConversationParams struct {
@@ -37,6 +37,8 @@ func (q *Queries) CreateAnonymousToolConversation(ctx context.Context, arg Creat
 		&i.ContextCheckpointMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.UserActivityAt,
+		&i.NotificationRouteLostAt,
 	)
 	return i, err
 }
