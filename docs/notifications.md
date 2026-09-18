@@ -6,10 +6,17 @@ app users when access is public. A topic/user override takes precedence over the
 default and survives conversation deletion. Directory presence does not enroll
 a user or establish app authority.
 
-`GET /api/agent/users` uses the current app credential and returns the tenant-wide
-human directory as ID, email, and display name only. Its scope matches the human
-member picker; app-owned callers do not borrow the owner's identity. It is an
-unpaginated native Go API, not a JavaScript or anonymous endpoint.
+`GET /api/agent/members` uses the current app credential and returns humans with
+actual direct or inherited role-group app grants, including public grants.
+Groups expand to humans; each human appears once with maximum access
+(`admin > user > public`). Humans without grants are excluded. Each `members`
+entry contains `user` (ID, email, display name, `platformMember: true`) and
+`access`. App-owned callers do not borrow the owner's identity.
+This native Go API is not a JavaScript or anonymous endpoint. `limit` defaults
+to 100 (including zero) and allows at most 1000; negative, empty, repeated, and
+malformed limits fail. `nextCursor` continues via `cursor`, ordered by immutable
+user creation time and ID. Cursors are app-bound; malformed, empty, repeated, or
+cross-app cursors fail. Pages reflect live grants, not a frozen snapshot.
 
 ## Routing
 

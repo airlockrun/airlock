@@ -876,7 +876,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		r.Get("/run/{runID}/checkpoint", ah.GetCheckpoint)
 		r.Post("/upgrade", ah.Upgrade)
 		r.Post("/print", ah.Print)
-		r.Get("/users", ah.ListUsers)
+		r.Get("/members", ah.ListMembers)
 		r.Post("/jobs", ah.EnqueueJob)
 		r.Get("/jobs", ah.ListJobs)
 		r.Get("/jobs/{jobID}", ah.GetJob)
