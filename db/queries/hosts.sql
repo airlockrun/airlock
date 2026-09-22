@@ -126,6 +126,9 @@ ORDER BY host.name, host.id;
 -- name: GetHost :one
 SELECT * FROM hosts WHERE id = @id AND lifecycle = 'active';
 
+-- name: DeleteHost :execrows
+DELETE FROM hosts WHERE id = @id AND lifecycle = 'active';
+
 -- name: LockHostForInventory :one
 SELECT * FROM hosts WHERE id = @id AND lifecycle = 'active' FOR UPDATE;
 
@@ -213,6 +216,8 @@ JOIN agent_resource_needs need ON need.agent_id = artifact_set.agent_id
 WHERE artifact_file.id = @artifact_file_id
   AND artifact_set.agent_id = @agent_id
   AND build.status = 'complete' AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND connector_interface_satisfies_need(artifact_set.interface_descriptor, artifact_set.contract_id, need.spec)
 RETURNING connector_resources.*;
 
@@ -453,6 +458,8 @@ WHERE connector.id = @connector_id AND connector.host_id = @host_id AND connecto
   AND artifact_set.kind = connector.kind AND artifact_set.contract_id = connector.contract_id
   AND artifact_file.platform = @platform
   AND build.status = 'complete' AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND NOT EXISTS (
       SELECT 1
       FROM agent_resource_needs need

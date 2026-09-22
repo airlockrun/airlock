@@ -631,10 +631,11 @@ func (h *Service) Sync(ctx context.Context, req wire.SyncRequest) (wire.SyncResp
 				schemas := make([]wire.MCPToolSchema, len(stored))
 				for i, t := range stored {
 					schemas[i] = wire.MCPToolSchema{
-						ServerSlug:  s.Slug,
-						Name:        t.Name,
-						Description: t.Description,
-						InputSchema: t.InputSchema,
+						ServerSlug:   s.Slug,
+						Name:         t.Name,
+						Description:  t.Description,
+						InputSchema:  t.InputSchema,
+						OutputSchema: t.OutputSchema,
 					}
 				}
 				if len(schemas) > 0 {

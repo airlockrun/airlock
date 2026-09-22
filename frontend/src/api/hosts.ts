@@ -1,10 +1,11 @@
 import { create, fromJson, toJson } from '@bufbuild/protobuf'
 import api from '@/api/client'
-import type { GetHostResponse, HostEnrollmentInfo, HostManagementJobResponse } from '@/gen/airlock/v1/api_pb'
+import type { GetHostManagementJobResponse, GetHostResponse, HostEnrollmentInfo, HostManagementJobResponse } from '@/gen/airlock/v1/api_pb'
 import type { HostInfo } from '@/gen/airlock/v1/types_pb'
 import {
   ApproveHostEnrollmentRequestSchema,
   DenyHostEnrollmentRequestSchema,
+  GetHostManagementJobResponseSchema,
   GetHostResponseSchema,
   HostEnrollmentInfoSchema,
   HostManagementJobResponseSchema,
@@ -25,6 +26,10 @@ export async function listHosts(): Promise<HostInfo[]> {
 export async function getHost(id: string): Promise<GetHostResponse> {
   const { data } = await api.get(`/api/v1/hosts/${id}`)
   return fromJson(GetHostResponseSchema, data)
+}
+
+export async function deleteHost(id: string): Promise<void> {
+  await api.delete(`/api/v1/hosts/${id}`)
 }
 
 export async function inspectHostEnrollment(userCode: string): Promise<HostEnrollmentInfo> {
@@ -60,6 +65,11 @@ export async function requestInstall(hostId: string, values: {
   const request = create(RequestConnectorInstallRequestSchema, { ...values, timeoutSeconds: 1800 })
   const { data } = await api.post(`/api/v1/hosts/${hostId}/connectors`, toJson(RequestConnectorInstallRequestSchema, request))
   return fromJson(HostManagementJobResponseSchema, data)
+}
+
+export async function getHostManagementJob(id: string): Promise<GetHostManagementJobResponse> {
+  const { data } = await api.get(`/api/v1/host-management-jobs/${id}`)
+  return fromJson(GetHostManagementJobResponseSchema, data)
 }
 
 export async function requestUpdate(connectorId: string, artifactFileId: string, settingsJson = ''): Promise<HostManagementJobResponse> {

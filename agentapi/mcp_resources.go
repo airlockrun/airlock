@@ -2,10 +2,8 @@ package agentapi
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"io"
-	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,9 +11,9 @@ import (
 
 	"github.com/airlockrun/airlock/db/dbq"
 	"github.com/airlockrun/airlock/service/mcpaccess"
-	runtimesvc "github.com/airlockrun/airlock/service/runtime"
 	"github.com/airlockrun/airlock/storage"
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 )
 
@@ -37,19 +35,12 @@ import (
 // v1: no pagination — agents typically have well under 1000 files. If a
 // directory exceeds 10k entries we cap and document. Pagination via
 // nextCursor can be added when actual usage hits the cap.
-func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWriter, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
+func (s *MCPServer) listResources(ctx context.Context, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal) (*mcp.ListResourcesResult, error) {
 	targetID := uuid.UUID(target.ID.Bytes)
 	roots, err := access.ListRoots(ctx, principal, targetID)
 	if err != nil {
 		s.logger.Error("mcp resources: resolve list roots", zap.Error(err))
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "list directories: "+err.Error())
-		return
-	}
-	type entry struct {
-		URI      string `json:"uri"`
-		Name     string `json:"name"`
-		MimeType string `json:"mimeType,omitempty"`
-		Size     int64  `json:"size,omitempty"`
+		return nil, err
 	}
 	const perDirCap = 10000
 	agentPrefix := "agents/" + targetID.String() + "/"
@@ -78,40 +69,32 @@ func (s *MCPServer) handleResourcesList(ctx context.Context, w http.ResponseWrit
 	sort.Strings(paths)
 	visible, err := access.FilterList(ctx, principal, targetID, paths)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "authorize directory listing")
-		return
+		return nil, err
 	}
-	out := make([]entry, 0, len(visible))
+	out := make([]*mcp.Resource, 0, len(visible))
 	for _, path := range visible {
 		obj := objects[path.Relative]
-		out = append(out, entry{URI: "agent://" + path.Relative, Name: filepath.Base(path.Relative), MimeType: mimeFromName(path.Relative), Size: obj.Size})
+		out = append(out, &mcp.Resource{URI: "agent://" + path.Relative, Name: filepath.Base(path.Relative), MIMEType: mimeFromName(path.Relative), Size: obj.Size})
 	}
-	result, _ := json.Marshal(map[string]any{"resources": out})
-	writeJSONRPCResult(w, msg.ID, result)
+	return &mcp.ListResourcesResult{Resources: out, Cacheable: mcp.Cacheable{CacheScope: "private"}}, nil
 }
 
 // handleResourcesRead returns the bytes of one resource. For ≤10MB
 // files, inline base64. For larger files, return a friendly text +
 // _meta.airlock.run/downloadUrl presigned URL.
-func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWriter, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
-	var params struct {
-		URI string `json:"uri"`
+func (s *MCPServer) readResource(ctx context.Context, h *Handler, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, uri string) (*mcp.ReadResourceResult, error) {
+	path, ok := strings.CutPrefix(uri, "agent://")
+	if !ok || path == "" {
+		return nil, errors.New("agent resource URI is required")
 	}
-	if err := json.Unmarshal(msg.Params, &params); err != nil || params.URI == "" {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "uri is required")
-		return
-	}
-	path := strings.TrimPrefix(params.URI, "agent://")
 	resolved, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
-		return
+		return nil, errors.New("resource not found")
 	}
 
 	info, ct, err := h.s3.HeadObject(ctx, resolved.S3Key)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
-		return
+		return nil, errors.New("resource not found")
 	}
 
 	// Large file: return the presigned URL via _meta + a friendly text
@@ -119,8 +102,7 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 	// message; ones that read _meta open the URL directly.
 	if info.Size > int64(maxInlineResourceBytes) {
 		if _, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path); err != nil {
-			writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
-			return
+			return nil, errors.New("resource not found")
 		}
 		url, perr := h.s3.PublicPresignGetURL(ctx, resolved.S3Key, presignedURLTTL)
 		var stub string
@@ -133,68 +115,43 @@ func (s *MCPServer) handleResourcesRead(ctx context.Context, w http.ResponseWrit
 			s.logger.Warn("mcp resources: presign", zap.Error(perr))
 			stub = "File exceeds inline transfer limit and a download URL could not be generated."
 		}
-		contents := []map[string]any{{
-			"uri":      params.URI,
-			"mimeType": ct,
-			"text":     stub,
-			"_meta":    meta,
-		}}
-		result, _ := json.Marshal(map[string]any{"contents": contents})
-		writeJSONRPCResult(w, msg.ID, result)
-		return
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: uri, MIMEType: ct, Text: stub, Meta: meta}}, Cacheable: mcp.Cacheable{CacheScope: "private"}}, nil
 	}
 
 	reader, err := h.s3.GetObject(ctx, resolved.S3Key)
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "fetch: "+err.Error())
-		return
+		return nil, err
 	}
 	defer reader.Close()
 	raw, err := io.ReadAll(io.LimitReader(reader, int64(maxInlineResourceBytes)+1))
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "read: "+err.Error())
-		return
+		return nil, err
 	}
 	if len(raw) > maxInlineResourceBytes {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "file exceeds inline transfer limit")
-		return
+		return nil, errors.New("file exceeds inline transfer limit")
 	}
 	if _, err := access.ResolveFile(ctx, principal, uuid.UUID(target.ID.Bytes), path); err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrInvalidParams, "resource not found")
-		return
+		return nil, errors.New("resource not found")
 	}
-	contents := []map[string]any{{
-		"uri":      params.URI,
-		"mimeType": ct,
-		"blob":     base64.StdEncoding.EncodeToString(raw),
-	}}
-	result, _ := json.Marshal(map[string]any{"contents": contents})
-	writeJSONRPCResult(w, msg.ID, result)
+	return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: uri, MIMEType: ct, Blob: raw}}, Cacheable: mcp.Cacheable{CacheScope: "private"}}, nil
 }
 
 // handleResourcesTemplatesList returns one URI template per visible
 // directory so clients can show a tree view of the agent's namespace.
-func (s *MCPServer) handleResourcesTemplatesList(ctx context.Context, w http.ResponseWriter, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal, msg runtimesvc.JsonrpcMessage) {
+func (s *MCPServer) listResourceTemplates(ctx context.Context, access *mcpaccess.Service, target dbq.Agent, principal MCPPrincipal) (*mcp.ListResourceTemplatesResult, error) {
 	roots, err := access.ListRoots(ctx, principal, uuid.UUID(target.ID.Bytes))
 	if err != nil {
-		writeJSONRPCError(w, msg.ID, runtimesvc.RpcErrServerError, "list directories: "+err.Error())
-		return
+		return nil, err
 	}
-	type tmpl struct {
-		URITemplate string `json:"uriTemplate"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-	}
-	out := make([]tmpl, 0, len(roots))
+	out := make([]*mcp.ResourceTemplate, 0, len(roots))
 	for _, root := range roots {
-		out = append(out, tmpl{
+		out = append(out, &mcp.ResourceTemplate{
 			URITemplate: "agent://" + root.Relative + "/{filename}",
 			Name:        root.DirectoryPath,
 			Description: root.Description,
 		})
 	}
-	result, _ := json.Marshal(map[string]any{"resourceTemplates": out})
-	writeJSONRPCResult(w, msg.ID, result)
+	return &mcp.ListResourceTemplatesResult{ResourceTemplates: out, Cacheable: mcp.Cacheable{CacheScope: "private"}}, nil
 }
 
 // mimeFromName guesses content-type from extension. Used purely as a UI

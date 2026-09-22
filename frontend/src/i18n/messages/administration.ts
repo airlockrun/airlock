@@ -493,6 +493,22 @@ export const administrationMessages = defineMessages({
     defaultMessage: 'Select default build model',
     description: 'Placeholder for selecting the default build model.',
   },
+  'administration.settings.codegenMaxInputTokens': {
+    defaultMessage: 'Codegen Input Token Limit',
+    description: 'Label for the cumulative input token limit applied to one code generation build.',
+  },
+  'administration.settings.codegenMaxInputTokensHelp': {
+    defaultMessage: 'Stops a build before its next model step after cumulative cached and uncached input reaches this value.',
+    description: 'Help text for the code generation input token limit.',
+  },
+  'administration.settings.codegenMaxSteps': {
+    defaultMessage: 'Codegen Step Limit',
+    description: 'Label for the model step limit applied to one code generation build.',
+  },
+  'administration.settings.codegenMaxStepsHelp': {
+    defaultMessage: 'Maximum model steps allowed before an unfinished build stops.',
+    description: 'Help text for the code generation step limit.',
+  },
   'administration.settings.embeddingHelp': {
     defaultMessage: 'Default model for text → vector embeddings (e.g. OpenAI text-embedding-3-small).',
     description: 'Help text for the default embedding model. Keep the example model ID unchanged.',
@@ -566,7 +582,7 @@ export const administrationMessages = defineMessages({
     description: 'Placeholder for selecting the default text-to-speech model.',
   },
   'administration.settings.subtitle': {
-    defaultMessage: 'Interface language and per-capability model defaults.',
+    defaultMessage: 'Interface language, code generation limits, and per-capability model defaults.',
     description: 'Subtitle of the system settings card.',
   },
   'administration.settings.systemSettings': {

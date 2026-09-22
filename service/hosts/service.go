@@ -823,6 +823,42 @@ func (s *Service) Get(ctx context.Context, p authz.Principal, hostID uuid.UUID) 
 	return Detail{Host: host, Capabilities: capabilities, OwnerName: names[0].Name, Connectors: connectors, Jobs: jobs}, err
 }
 
+func (s *Service) Delete(ctx context.Context, p authz.Principal, hostID uuid.UUID) error {
+	tx, err := s.db.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := dbq.New(tx)
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "host", hostID); err != nil {
+		return err
+	}
+	if err := authz.LockResource(ctx, q, "host", hostID); err != nil {
+		return err
+	}
+	if err := authz.AuthorizeResource(ctx, q, p, authz.ResourceManage, "host", hostID); err != nil {
+		return err
+	}
+	host, err := q.GetHost(ctx, pg(hostID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return service.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if hostHeartbeatFresh(host.LastSeenAt, time.Now()) {
+		return service.Detail(service.ErrConflict, "host is still online; unenroll or stop it and wait for its heartbeat to become stale before deleting it")
+	}
+	deleted, err := q.DeleteHost(ctx, pg(hostID))
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return service.ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Service) GetJob(ctx context.Context, p authz.Principal, jobID uuid.UUID) (dbq.HostManagementJob, []dbq.HostManagementEvent, error) {
 	q := dbq.New(s.db.Pool())
 	job, err := q.GetHostManagementJob(ctx, pg(jobID))
@@ -938,6 +974,9 @@ func (s *Service) RequestInstall(ctx context.Context, p authz.Principal, hostID 
 		}
 		if err != nil {
 			return dbq.HostManagementJob{}, err
+		}
+		if artifact.ProtocolMajor != int32(protocol.Major) || !slices.Contains(artifact.Features, protocol.FeatureHostedChildV1) {
+			return dbq.HostManagementJob{}, service.Detail(service.ErrNotFound, "artifact file is not compatible with this connector host")
 		}
 		if err := admitHostContract(ctx, qtx, hostID, uuid.Nil, artifact.ContractID); err != nil {
 			return dbq.HostManagementJob{}, err

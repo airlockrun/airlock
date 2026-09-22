@@ -26,6 +26,12 @@ and treat the host account and all installed connectors as one trust domain.
 Each enrollment creates a distinct host identity. Re-enrolling a machine does
 not infer or adopt connector installations from another host.
 
+An operator with `manage` capability can permanently delete a host after its
+two-minute heartbeat window becomes stale. Deletion removes its credentials,
+hosted connector records, grants, and management history. Connector bindings
+are detached, pending work is cancelled, and transfer cleanup remains durable.
+Online hosts must be unenrolled or stopped before deletion.
+
 ## Local Access
 
 The host reports one mode on every sync and heartbeat:

@@ -14,9 +14,21 @@ Airlock is a self-hosted platform for creating and deploying AI-native apps. Bui
 
 ## Installation
 
-This branch is a prerelease development cycle, not a production installation
-target. Installation quickstarts are available with stable releases; see the
-[installation guide](https://airlock.run/docs/installation/).
+Follow the [installation guide](https://airlock.run/docs/installation/) or run the pinned installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/airlockrun/airlock/v0.7.0/install.sh | bash
+```
+
+To inspect the installer first:
+
+```bash
+git clone https://github.com/airlockrun/airlock.git
+cd airlock
+git checkout v0.7.0
+less install.sh
+./install.sh
+```
 
 ## Development
 

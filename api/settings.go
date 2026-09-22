@@ -62,8 +62,10 @@ func (h *settingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		{Name: "default_search", Model: in.DefaultSearchModel, ProviderIDRaw: in.DefaultSearchProviderId, ModelRequired: false},
 	}
 	row, err := h.svc.Update(r.Context(), principalFromRequest(r), settingssvc.UpdateRequest{
-		Slots:    slots,
-		UILocale: in.UiLocale,
+		Slots:                 slots,
+		UILocale:              in.UiLocale,
+		CodegenMaxSteps:       in.CodegenMaxSteps,
+		CodegenMaxInputTokens: in.CodegenMaxInputTokens,
 	})
 	if err != nil {
 		writeServiceError(w, err, "failed to update system settings")

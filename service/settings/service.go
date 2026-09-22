@@ -1,7 +1,7 @@
-// Package settings owns the single-row system_settings table: the tenant-wide
-// locale and default (provider FK, bare model name) pairs. Read is open to any
-// authenticated user; write is admin-only. Both gates run through
-// authz.Authorize.
+// Package settings owns the single-row system_settings table: tenant-wide
+// locale, codegen limits, and default (provider FK, bare model name) pairs.
+// Read is open to any authenticated user; write is admin-only. Both gates run
+// through authz.Authorize.
 package settings
 
 import (
@@ -59,12 +59,13 @@ type SlotUpdate struct {
 	ModelRequired bool // when false, an empty model paired with an FK is allowed (e.g. default_search)
 }
 
-// UpdateRequest carries every capability slot. The handler builds it
-// from the inbound proto; the service does the empty/FK validation +
-// per-slot model-required rule.
+// UpdateRequest carries every editable system setting. The handler builds it
+// from the inbound proto; the service validates limits and each model slot.
 type UpdateRequest struct {
-	Slots    []SlotUpdate
-	UILocale string
+	Slots                 []SlotUpdate
+	UILocale              string
+	CodegenMaxSteps       int32
+	CodegenMaxInputTokens int32
 }
 
 func (s *Service) Get(ctx context.Context, p authz.Principal) (dbq.SystemSetting, error) {
@@ -84,6 +85,12 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 	q := dbq.New(s.db.Pool())
 	if err := authz.Authorize(ctx, q, p, authz.TenantSettingsUpdate, uuid.Nil); err != nil {
 		return dbq.SystemSetting{}, err
+	}
+	if req.CodegenMaxSteps <= 0 {
+		return dbq.SystemSetting{}, service.Detail(service.ErrInvalidInput, "codegen_max_steps must be greater than zero")
+	}
+	if req.CodegenMaxInputTokens <= 0 {
+		return dbq.SystemSetting{}, service.Detail(service.ErrInvalidInput, "codegen_max_input_tokens must be greater than zero")
 	}
 	parsed := make(map[string]pgtype.UUID, len(req.Slots))
 	models := make(map[string]string, len(req.Slots))
@@ -168,6 +175,8 @@ func (s *Service) Update(ctx context.Context, p authz.Principal, req UpdateReque
 		DefaultEmbeddingModel:      models["default_embedding"],
 		DefaultSearchProviderID:    parsed["default_search"],
 		DefaultSearchModel:         models["default_search"],
+		CodegenMaxSteps:            req.CodegenMaxSteps,
+		CodegenMaxInputTokens:      req.CodegenMaxInputTokens,
 		UiLocale:                   uiLocale,
 	})
 	if err != nil {

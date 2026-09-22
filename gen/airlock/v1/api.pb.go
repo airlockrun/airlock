@@ -9158,12 +9158,13 @@ func (x *InvokeConnectionResponse) GetBody() []byte {
 }
 
 type IntegrationMCPTool struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Description     string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
-	InputSchemaJson []byte                 `protobuf:"bytes,3,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Name             string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Description      string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	InputSchemaJson  []byte                 `protobuf:"bytes,3,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
+	OutputSchemaJson []byte                 `protobuf:"bytes,4,opt,name=output_schema_json,json=outputSchemaJson,proto3" json:"output_schema_json,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *IntegrationMCPTool) Reset() {
@@ -9213,6 +9214,13 @@ func (x *IntegrationMCPTool) GetDescription() string {
 func (x *IntegrationMCPTool) GetInputSchemaJson() []byte {
 	if x != nil {
 		return x.InputSchemaJson
+	}
+	return nil
+}
+
+func (x *IntegrationMCPTool) GetOutputSchemaJson() []byte {
+	if x != nil {
+		return x.OutputSchemaJson
 	}
 	return nil
 }
@@ -9329,6 +9337,7 @@ type IntegrationMCPContent struct {
 	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	MimeType      string                 `protobuf:"bytes,5,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
 	Data          string                 `protobuf:"bytes,6,opt,name=data,proto3" json:"data,omitempty"`
+	ContentJson   []byte                 `protobuf:"bytes,7,opt,name=content_json,json=contentJson,proto3" json:"content_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9405,12 +9414,21 @@ func (x *IntegrationMCPContent) GetData() string {
 	return ""
 }
 
+func (x *IntegrationMCPContent) GetContentJson() []byte {
+	if x != nil {
+		return x.ContentJson
+	}
+	return nil
+}
+
 type InvokeMCPToolResponse struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	Content       []*IntegrationMCPContent `protobuf:"bytes,1,rep,name=content,proto3" json:"content,omitempty"`
-	IsError       bool                     `protobuf:"varint,2,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState   `protogen:"open.v1"`
+	Content               []*IntegrationMCPContent `protobuf:"bytes,1,rep,name=content,proto3" json:"content,omitempty"`
+	IsError               bool                     `protobuf:"varint,2,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
+	StructuredContentJson []byte                   `protobuf:"bytes,3,opt,name=structured_content_json,json=structuredContentJson,proto3" json:"structured_content_json,omitempty"`
+	MetaJson              []byte                   `protobuf:"bytes,4,opt,name=meta_json,json=metaJson,proto3" json:"meta_json,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *InvokeMCPToolResponse) Reset() {
@@ -9455,6 +9473,20 @@ func (x *InvokeMCPToolResponse) GetIsError() bool {
 		return x.IsError
 	}
 	return false
+}
+
+func (x *InvokeMCPToolResponse) GetStructuredContentJson() []byte {
+	if x != nil {
+		return x.StructuredContentJson
+	}
+	return nil
+}
+
+func (x *InvokeMCPToolResponse) GetMetaJson() []byte {
+	if x != nil {
+		return x.MetaJson
+	}
+	return nil
 }
 
 // CandidateInfo is an existing resource whose shape matches a need (bindable for reuse).
@@ -12245,27 +12277,31 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\vstatus_code\x18\x01 \x01(\x05R\n" +
 	"statusCode\x12;\n" +
 	"\aheaders\x18\x02 \x03(\v2!.airlock.v1.IntegrationHTTPHeaderR\aheaders\x12\x12\n" +
-	"\x04body\x18\x03 \x01(\fR\x04body\"v\n" +
+	"\x04body\x18\x03 \x01(\fR\x04body\"\xa4\x01\n" +
 	"\x12IntegrationMCPTool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12*\n" +
-	"\x11input_schema_json\x18\x03 \x01(\fR\x0finputSchemaJson\"{\n" +
+	"\x11input_schema_json\x18\x03 \x01(\fR\x0finputSchemaJson\x12,\n" +
+	"\x12output_schema_json\x18\x04 \x01(\fR\x10outputSchemaJson\"{\n" +
 	"\x1fListIntegrationMCPToolsResponse\x124\n" +
 	"\x05tools\x18\x01 \x03(\v2\x1e.airlock.v1.IntegrationMCPToolR\x05tools\x12\"\n" +
 	"\finstructions\x18\x02 \x01(\tR\finstructions\"Q\n" +
 	"\x14InvokeMCPToolRequest\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12%\n" +
-	"\x0earguments_json\x18\x02 \x01(\fR\rargumentsJson\"\x96\x01\n" +
+	"\x0earguments_json\x18\x02 \x01(\fR\rargumentsJson\"\xb9\x01\n" +
 	"\x15IntegrationMCPContent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x10\n" +
 	"\x03uri\x18\x03 \x01(\tR\x03uri\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x1b\n" +
 	"\tmime_type\x18\x05 \x01(\tR\bmimeType\x12\x12\n" +
-	"\x04data\x18\x06 \x01(\tR\x04data\"o\n" +
+	"\x04data\x18\x06 \x01(\tR\x04data\x12!\n" +
+	"\fcontent_json\x18\a \x01(\fR\vcontentJson\"\xc4\x01\n" +
 	"\x15InvokeMCPToolResponse\x12;\n" +
 	"\acontent\x18\x01 \x03(\v2!.airlock.v1.IntegrationMCPContentR\acontent\x12\x19\n" +
-	"\bis_error\x18\x02 \x01(\bR\aisError\"\xee\x02\n" +
+	"\bis_error\x18\x02 \x01(\bR\aisError\x126\n" +
+	"\x17structured_content_json\x18\x03 \x01(\fR\x15structuredContentJson\x12\x1b\n" +
+	"\tmeta_json\x18\x04 \x01(\fR\bmetaJson\"\xee\x02\n" +
 	"\rCandidateInfo\x12\x1f\n" +
 	"\vresource_id\x18\x01 \x01(\tR\n" +
 	"resourceId\x12\x12\n" +

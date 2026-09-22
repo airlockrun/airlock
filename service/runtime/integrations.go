@@ -143,13 +143,6 @@ func (h *Service) CallMCPTool(ctx context.Context, agentID uuid.UUID, slug strin
 	if len(encoded) > maxIntegrationOutputBytes {
 		return wire.MCPToolCallResponse{}, service.Detail(service.ErrInvalidInput, "MCP response exceeds %d bytes", maxIntegrationOutputBytes)
 	}
-	if creds != "" {
-		for i := range result.Content {
-			result.Content[i].Text = strings.ReplaceAll(result.Content[i].Text, creds, "[REDACTED]")
-			result.Content[i].URI = strings.ReplaceAll(result.Content[i].URI, creds, "[REDACTED]")
-			result.Content[i].Data = strings.ReplaceAll(result.Content[i].Data, creds, "[REDACTED]")
-		}
-	}
 	return *result, nil
 }
 

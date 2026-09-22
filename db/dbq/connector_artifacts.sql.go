@@ -223,6 +223,8 @@ WHERE need.agent_id = $1
   AND artifact_file.id = $3
   AND build.status = 'complete'
   AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND connector_interface_satisfies_need(
       artifact_set.interface_descriptor,
       artifact_set.contract_id,
@@ -372,6 +374,8 @@ WHERE need.agent_id = $1
   AND need.deleted_at IS NULL
   AND build.status = 'complete'
   AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND connector_interface_satisfies_need(
       artifact_set.interface_descriptor,
       artifact_set.contract_id,

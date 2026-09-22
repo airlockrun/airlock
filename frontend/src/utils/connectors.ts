@@ -256,6 +256,9 @@ export interface ConnectorArtifactVersion {
   compatible: boolean
   latestCompatible: boolean
   artifactDigest: string
+  protocolMajor: number
+  protocolMinor: number
+  features: string[]
   serviceMode: ConnectorServiceMode | ''
   interface: ConnectorInterfaceDescriptor
   settings: ConnectorSettingDescriptor[]

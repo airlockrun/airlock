@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import type { NeedInfo } from '@/gen/airlock/v1/api_pb'
 import type { ConnectorInfo, HostInfo } from '@/gen/airlock/v1/types_pb'
 import { ConnectorArtifactValidationError, listConnectorArtifacts } from '@/api/connectors'
-import { getHost, listHosts, requestInstall } from '@/api/hosts'
+import { getHost, getHostManagementJob, listHosts, requestInstall } from '@/api/hosts'
 import { useNow } from '@/composables/useNow'
 import { useAirlockI18n } from '@/i18n'
 import { hasCapability } from '@/utils/resources'
@@ -48,7 +48,13 @@ const selectedHostId = ref('')
 const displayName = ref('')
 const settingValues = ref<Record<string, ConnectorSettingValue>>({})
 const saving = ref(false)
+const hostRefreshError = ref('')
 let loadSequence = 0
+let installSequence = 0
+let hostRefreshTimer: ReturnType<typeof setInterval> | undefined
+let hostRefreshInFlight = false
+
+const hostRefreshInterval = 30_000
 
 const choices = computed<HostChoice[]>(() => hosts.value.map((host) => {
   const platform = `${host.platform}-${host.architecture}`
@@ -99,6 +105,7 @@ async function load(): Promise<void> {
   const sequence = ++loadSequence
   loading.value = true
   error.value = ''
+  hostRefreshError.value = ''
   selectedHostId.value = ''
   displayName.value = ''
   settingValues.value = {}
@@ -120,9 +127,51 @@ async function load(): Promise<void> {
   }
 }
 
+async function refreshHosts(): Promise<void> {
+  if (!visible.value || hostRefreshInFlight) return
+  const sequence = loadSequence
+  hostRefreshInFlight = true
+  try {
+    const loadedHosts = await listHosts()
+    if (visible.value && sequence === loadSequence) {
+      hosts.value = loadedHosts
+      hostRefreshError.value = ''
+    }
+  } catch (cause: unknown) {
+    if (visible.value && sequence === loadSequence) {
+      hostRefreshError.value = errorMessage(cause, t('connectors.install.host.refreshFailed'))
+    }
+  } finally {
+    hostRefreshInFlight = false
+  }
+}
+
+function startHostRefresh(): void {
+  if (hostRefreshTimer) clearInterval(hostRefreshTimer)
+  hostRefreshTimer = setInterval(() => void refreshHosts(), hostRefreshInterval)
+}
+
+function stopHostRefresh(): void {
+  if (hostRefreshTimer) clearInterval(hostRefreshTimer)
+  hostRefreshTimer = undefined
+  hostRefreshError.value = ''
+}
+
 watch(visible, (open) => {
-  if (open) void load()
-  else loadSequence++
+  if (open) {
+    void load()
+    startHostRefresh()
+  } else {
+    loadSequence++
+    installSequence++
+    stopHostRefresh()
+  }
+})
+
+onBeforeUnmount(() => {
+  loadSequence++
+  installSequence++
+  stopHostRefresh()
 })
 
 watch(() => selectedChoice.value?.version?.artifactSetId ?? '', () => {
@@ -164,19 +213,27 @@ async function install(): Promise<void> {
   const need = props.connectorNeed
   if (!choice?.target || choice.reason || !need || !canInstall.value) return
   saving.value = true
+  const sequence = ++installSequence
   try {
-    await requestInstall(choice.host.id, {
+    const response = await requestInstall(choice.host.id, {
       agentId: props.agentId,
       needSlug: need.slug,
       artifactFileId: choice.target.artifactFileId,
       displayName: displayName.value.trim(),
       settingsJson: serializedSettings(),
     })
+    let job = response.job
+    while (job && sequence === installSequence && (job.status === '' || job.status === 'queued' || job.status === 'running')) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      if (sequence !== installSequence) return
+      job = (await getHostManagementJob(job.id)).job
+    }
+    if (!job) throw new Error(t('connectors.install.host.resultUnavailable'))
+    if (job.status !== 'succeeded') throw new Error(job.errorMessage || t('connectors.install.host.failed'))
     visible.value = false
     toast.add({
       severity: 'success',
-      summary: t('connectors.install.host.installingOn', { host: choice.host.name }),
-      detail: t('connectors.install.host.workQueued'),
+      summary: t('connectors.install.host.installedOn', { host: choice.host.name }),
       life: 4000,
     })
     emit('installed')
@@ -228,6 +285,7 @@ async function install(): Promise<void> {
           </RouterLink>
         </div>
       </div>
+      <Message v-if="hostRefreshError" severity="warn" :closable="false">{{ hostRefreshError }}</Message>
 
       <template v-if="selectedChoice">
         <div class="field">

@@ -780,6 +780,8 @@ JOIN agent_resource_needs need ON need.agent_id = artifact_set.agent_id
 WHERE artifact_file.id = $9
   AND artifact_set.agent_id = $10
   AND build.status = 'complete' AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND connector_interface_satisfies_need(artifact_set.interface_descriptor, artifact_set.contract_id, need.spec)
 RETURNING connector_resources.id, connector_resources.owner_principal_id, connector_resources.slug, connector_resources.kind, connector_resources.contract_id, connector_resources.name, connector_resources.display_name, connector_resources.description, connector_resources.protocol_major, connector_resources.protocol_minor, connector_resources.features, connector_resources.artifact_version, connector_resources.artifact_digest, connector_resources.interface_descriptor, connector_resources.interface_hash, connector_resources.readiness, connector_resources.readiness_message, connector_resources.labels, connector_resources.lifecycle, connector_resources.last_seen_at, connector_resources.last_ready_at, connector_resources.created_at, connector_resources.updated_at, connector_resources.storage_origins, connector_resources.activation_manifest, connector_resources.activation_manifest_hash, connector_resources.service_mode, connector_resources.artifact_set_id, connector_resources.host_id, connector_resources.rollback_artifact_set_id, connector_resources.inventory_revision, connector_resources.inventory_mutation_hash, connector_resources.active_provenance, connector_resources.rollback_provenance, connector_resources.active_observation_state, connector_resources.rollback_observation_state, connector_resources.observed_active_digest, connector_resources.observed_active_manifest, connector_resources.observed_active_manifest_hash, connector_resources.observed_rollback_digest, connector_resources.observed_rollback_manifest, connector_resources.observed_rollback_manifest_hash
 `
@@ -1019,6 +1021,18 @@ func (q *Queries) DeleteExpiredHostEnrollments(ctx context.Context, lim int32) (
 	return result.RowsAffected(), nil
 }
 
+const deleteHost = `-- name: DeleteHost :execrows
+DELETE FROM hosts WHERE id = $1 AND lifecycle = 'active'
+`
+
+func (q *Queries) DeleteHost(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteHost, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRetainedHostManagementJobs = `-- name: DeleteRetainedHostManagementJobs :execrows
 WITH retained AS (
     SELECT id FROM host_management_jobs
@@ -1141,6 +1155,8 @@ WHERE connector.id = $2 AND connector.host_id = $3 AND connector.lifecycle = 'ac
   AND artifact_set.kind = connector.kind AND artifact_set.contract_id = connector.contract_id
   AND artifact_file.platform = $4
   AND build.status = 'complete' AND artifact_set.retired_at IS NULL
+  AND artifact_set.protocol_major = 1
+  AND 'hosted-child-v1' = ANY(artifact_set.features)
   AND NOT EXISTS (
       SELECT 1
       FROM agent_resource_needs need
