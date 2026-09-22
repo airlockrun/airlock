@@ -409,6 +409,10 @@ export const connectorMessages = defineMessages({
     defaultMessage: 'Failed to load hosts and retained artifacts',
     description: 'Fallback error when managed hosts or connector artifacts cannot be loaded.',
   },
+  'connectors.install.host.refreshFailed': {
+    defaultMessage: 'Could not refresh host status. Showing the last known status.',
+    description: 'Warning shown when a background host-status refresh fails in the connector installation dialog.',
+  },
   'connectors.install.host.noneAvailable': {
     defaultMessage: 'No hosts are available. Enroll a host from Resources before installing this connector.',
     description: 'Empty state in the connector installation dialog when no managed hosts are visible.',
@@ -445,9 +449,13 @@ export const connectorMessages = defineMessages({
     defaultMessage: 'Select a value',
     description: 'Placeholder for an enumerated connector setting.',
   },
-  'connectors.install.host.installingOn': {
-    defaultMessage: 'Installing on {host}',
-    description: 'Success toast summary after queuing installation. host is the user-visible host name.',
+  'connectors.install.host.installedOn': {
+    defaultMessage: 'Installed on {host}',
+    description: 'Success toast summary after connector installation completes. host is the user-visible host name.',
+  },
+  'connectors.install.host.resultUnavailable': {
+    defaultMessage: 'Airlock did not return the connector installation result.',
+    description: 'Error shown when an install management job has no result.',
   },
   'connectors.install.host.workQueued': {
     defaultMessage: 'Management work has been queued.',
@@ -494,8 +502,16 @@ export const connectorMessages = defineMessages({
     description: 'Fallback error when retained artifacts for a connector update cannot be loaded.',
   },
   'connectors.update.retainedVersion': {
-    defaultMessage: 'Retained version',
-    description: 'Label for selecting a retained connector artifact version.',
+    defaultMessage: 'Retained build',
+    description: 'Label for selecting a retained connector artifact build.',
+  },
+  'connectors.update.artifactOption': {
+    defaultMessage: '{version} · build {build} · SHA-256 {digest}',
+    description: 'Connector update option identity. build and digest are shortened stable identifiers. Preserve SHA-256 exactly.',
+  },
+  'connectors.update.currentArtifact': {
+    defaultMessage: 'currently installed',
+    description: 'Marker on the connector artifact build currently installed on the host.',
   },
   'connectors.update.artifactDigest': {
     defaultMessage: '{filename} · SHA-256 {sha256}',
@@ -572,6 +588,30 @@ export const connectorMessages = defineMessages({
   'connectors.host.detail.shell': {
     defaultMessage: 'Shell',
     description: 'Button label for opening the managed host shell request dialog.',
+  },
+  'connectors.host.detail.delete': {
+    defaultMessage: 'Delete host',
+    description: 'Destructive action label for permanently deleting a stale managed host.',
+  },
+  'connectors.host.detail.deleteHeader': {
+    defaultMessage: 'Delete {name}?',
+    description: 'Confirmation heading for permanently deleting a managed host.',
+  },
+  'connectors.host.detail.deleteImpact': {
+    defaultMessage: 'This permanently deletes the host credential, its installed connector records, and management history. Connector bindings and pending work are cancelled. This cannot be undone.',
+    description: 'Impact warning shown before permanently deleting a managed host.',
+  },
+  'connectors.host.detail.deleteOnline': {
+    defaultMessage: 'Unenroll or stop this host and wait for it to become stale before deleting it.',
+    description: 'Explanation shown when deletion is disabled for an online managed host.',
+  },
+  'connectors.host.detail.deleted': {
+    defaultMessage: 'Host deleted',
+    description: 'Success notification after permanently deleting a managed host.',
+  },
+  'connectors.host.detail.deleteFailed': {
+    defaultMessage: 'Failed to delete host',
+    description: 'Fallback error when permanently deleting a managed host fails.',
   },
   'connectors.host.detail.hostedConnectors': {
     defaultMessage: 'Hosted connectors',

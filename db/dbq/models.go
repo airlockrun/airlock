@@ -1032,16 +1032,6 @@ type ManagedBotSession struct {
 	ChatOriginID         pgtype.UUID        `json:"chat_origin_id"`
 }
 
-type McpActiveRequest struct {
-	TargetAgentID     pgtype.UUID        `json:"target_agent_id"`
-	PrincipalIdentity string             `json:"principal_identity"`
-	RequestID         []byte             `json:"request_id"`
-	RunID             pgtype.UUID        `json:"run_id"`
-	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	OwnerToken        pgtype.UUID        `json:"owner_token"`
-}
-
 type Migration004ResourceGrantBackup struct {
 	ID               pgtype.UUID        `json:"id"`
 	ConnectionID     pgtype.UUID        `json:"connection_id"`
@@ -1371,6 +1361,8 @@ type SystemSetting struct {
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
 	LastSeenSdkVersion         string             `json:"last_seen_sdk_version"`
 	UiLocale                   string             `json:"ui_locale"`
+	CodegenMaxSteps            int32              `json:"codegen_max_steps"`
+	CodegenMaxInputTokens      int32              `json:"codegen_max_input_tokens"`
 }
 
 type Tenant struct {

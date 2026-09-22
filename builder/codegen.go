@@ -159,6 +159,9 @@ func (b *BuildService) runCodegen(
 		if solResult.Status == sol.RunStepLimitReached {
 			return "", "", "", errors.New("sol codegen failed: step limit reached before completion")
 		}
+		if solResult.Status == sol.RunInputTokenLimitReached {
+			return "", "", "", fmt.Errorf("sol codegen failed: %w", solResult.Error)
+		}
 		if solResult.Status == sol.RunCompleted {
 			logLine("[exit] agent did not call the exit tool after 2 reminders — treating as failure")
 			return "", "", "", errors.New("sol codegen failed: agent did not call the exit tool")

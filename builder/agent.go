@@ -22,14 +22,15 @@ type BuilderPromptData struct {
 }
 
 // newAgentBuilderAgent creates the agent-builder agent configuration.
-func newAgentBuilderAgent(tools tool.Set, hasWebSearch bool) *agent.Agent {
+func newAgentBuilderAgent(tools tool.Set, hasWebSearch bool, maxSteps, maxInputTokens int) *agent.Agent {
 	var buf bytes.Buffer
 	builderTmpl.Execute(&buf, BuilderPromptData{HasWebSearch: hasWebSearch})
 
 	return &agent.Agent{
-		Name:         "agent-builder",
-		SystemPrompt: buf.String(),
-		Tools:        tools,
-		MaxSteps:     100,
+		Name:           "agent-builder",
+		SystemPrompt:   buf.String(),
+		Tools:          tools,
+		MaxSteps:       maxSteps,
+		MaxInputTokens: maxInputTokens,
 	}
 }

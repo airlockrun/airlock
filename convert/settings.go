@@ -5,9 +5,8 @@ import (
 	airlockv1 "github.com/airlockrun/airlock/gen/airlock/v1"
 )
 
-// SystemSettingsToProto maps the persisted defaults row to its wire
-// shape: the per-capability (provider FK, bare model name) pairs the
-// agent-create flow prefills from and the settings page edits.
+// SystemSettingsToProto maps the persisted tenant-wide settings to their wire
+// shape for the activation and settings views.
 func SystemSettingsToProto(s dbq.SystemSetting) *airlockv1.SystemSettingsInfo {
 	return &airlockv1.SystemSettingsInfo{
 		DefaultBuildModel:          s.DefaultBuildModel,
@@ -26,6 +25,8 @@ func SystemSettingsToProto(s dbq.SystemSetting) *airlockv1.SystemSettingsInfo {
 		DefaultImageGenProviderId:  PgUUIDToString(s.DefaultImageGenProviderID),
 		DefaultEmbeddingProviderId: PgUUIDToString(s.DefaultEmbeddingProviderID),
 		DefaultSearchProviderId:    PgUUIDToString(s.DefaultSearchProviderID),
+		CodegenMaxSteps:            s.CodegenMaxSteps,
+		CodegenMaxInputTokens:      s.CodegenMaxInputTokens,
 		UiLocale:                   s.UiLocale,
 	}
 }

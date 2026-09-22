@@ -32,6 +32,9 @@ const toast = useToast()
 const now = useNow()
 const { t } = useAirlockI18n()
 
+const hostedChildProtocolMajor = 1
+const hostedChildFeature = 'hosted-child-v1'
+
 const hosts = ref<HostInfo[]>([])
 const catalog = ref<ConnectorArtifactCatalog | null>(null)
 const selectedArtifactSetId = ref('')
@@ -53,13 +56,25 @@ const compatibleVersions = computed(() => {
     && version.interface.contractId === need.connectorContractId
   return versions.filter((version) =>
     sameInterface(version)
+    && version.protocolMajor === hostedChildProtocolMajor
+    && version.features.includes(hostedChildFeature)
     && version.targets.some((item) => item.target === target),
   )
 })
-const versionOptions = computed(() => compatibleVersions.value.map((version) => ({
-  value: version.artifactSetId,
-  label: `${version.version} · ${version.sourceCommit || version.buildId}`,
-})))
+const versionOptions = computed(() => compatibleVersions.value.map((version) => {
+  const target = host.value && version.targets.find((item) => item.target === `${host.value?.platform}-${host.value?.architecture}`)
+  const label = t('connectors.update.artifactOption', {
+    version: version.version,
+    build: version.buildId.slice(0, 8),
+    digest: (target?.sha256 || version.artifactDigest).slice(0, 12),
+  })
+  return {
+    value: version.artifactSetId,
+    label: target?.sha256 === props.connector?.artifactDigest
+      ? `${label} · ${t('connectors.update.currentArtifact')}`
+      : label,
+  }
+}))
 const selectedVersion = computed(() => compatibleVersions.value.find((version) => version.artifactSetId === selectedArtifactSetId.value))
 const selectedTarget = computed<ConnectorArtifactTarget | undefined>(() => {
   const selectedHost = host.value

@@ -69,6 +69,19 @@ func (h *hostsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, http.StatusOK, &airlockv1.GetHostResponse{Host: host, Connectors: connectors, ManagementJobs: jobs})
 }
 
+func (h *hostsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	hostID, err := parseUUID(chi.URLParam(r, "hostID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid host ID")
+		return
+	}
+	if err := h.hosts.Delete(r.Context(), principalFromRequest(r), hostID); err != nil {
+		writeServiceError(w, err, "failed to delete host")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func activeHostJobs(jobs []dbq.HostManagementJob) int32 {
 	var count int32
 	for _, job := range jobs {

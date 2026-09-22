@@ -58,6 +58,8 @@ const defaults = ref<Record<keyof SystemSettingsInfo & string, string>>({
   defaultSearchModel: '',
 } as Record<keyof SystemSettingsInfo & string, string>)
 const defaultsLoading = ref(false)
+const codegenMaxSteps = ref(400)
+const codegenMaxInputTokens = ref(40_000_000)
 
 // Pairs each picker key with its companion *_provider_id field on the
 // SystemSettingsInfo proto. Read/write paths use this to pack/unpack the
@@ -75,6 +77,8 @@ const slotProviderField: Record<keyof typeof defaults.value, keyof SystemSetting
 
 function applySettings(info: SystemSettingsInfo) {
   if (availableLocales.includes(info.uiLocale)) setLocale(info.uiLocale)
+  codegenMaxSteps.value = info.codegenMaxSteps
+  codegenMaxInputTokens.value = info.codegenMaxInputTokens
   for (const k of Object.keys(defaults.value) as (keyof typeof defaults.value)[]) {
     const modelName = (info as any)[k] || ''
     const providerKey = slotProviderField[k]
@@ -219,6 +223,8 @@ async function saveDefaults() {
       defaultEmbeddingProviderId: embedding.providerRowID,
       defaultSearchModel:         search.modelName,
       defaultSearchProviderId:    search.providerRowID,
+      codegenMaxSteps:            codegenMaxSteps.value,
+      codegenMaxInputTokens:      codegenMaxInputTokens.value,
       uiLocale:                   uiLocale.value,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {
@@ -263,6 +269,32 @@ async function saveDefaults() {
               style="width: 100%"
             />
             <small style="color: var(--p-text-muted-color)">{{ t('administration.settings.interfaceLanguageHelp') }}</small>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem">
+            <div style="display: flex; flex-direction: column; gap: 0.5rem">
+              <label for="codegen-max-steps" style="font-weight: 500">{{ t('administration.settings.codegenMaxSteps') }}</label>
+              <InputNumber
+                id="codegen-max-steps"
+                v-model="codegenMaxSteps"
+                :min="1"
+                :max="2147483647"
+                :use-grouping="true"
+                fluid
+              />
+              <small style="color: var(--p-text-muted-color)">{{ t('administration.settings.codegenMaxStepsHelp') }}</small>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem">
+              <label for="codegen-max-input-tokens" style="font-weight: 500">{{ t('administration.settings.codegenMaxInputTokens') }}</label>
+              <InputNumber
+                id="codegen-max-input-tokens"
+                v-model="codegenMaxInputTokens"
+                :min="1"
+                :max="2147483647"
+                :use-grouping="true"
+                fluid
+              />
+              <small style="color: var(--p-text-muted-color)">{{ t('administration.settings.codegenMaxInputTokensHelp') }}</small>
+            </div>
           </div>
           <div
             v-for="row in defaultRows"

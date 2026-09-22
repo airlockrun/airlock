@@ -1132,6 +1132,7 @@ message IntegrationMCPTool {
   string name = 1;
   string description = 2;
   bytes input_schema_json = 3;
+  bytes output_schema_json = 4;
 }
 
 message ListIntegrationMCPToolsResponse {
@@ -1151,11 +1152,14 @@ message IntegrationMCPContent {
   string name = 4;
   string mime_type = 5;
   string data = 6;
+  bytes content_json = 7;
 }
 
 message InvokeMCPToolResponse {
   repeated IntegrationMCPContent content = 1;
   bool is_error = 2;
+  bytes structured_content_json = 3;
+  bytes meta_json = 4;
 }
 
 // CandidateInfo is an existing resource whose shape matches a need (bindable for reuse).

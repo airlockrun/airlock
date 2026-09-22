@@ -163,7 +163,7 @@ func (h *integrationsHandler) ListMCPTools(w http.ResponseWriter, r *http.Reques
 	}
 	tools := make([]*airlockv1.IntegrationMCPTool, len(result.Tools))
 	for i, item := range result.Tools {
-		tools[i] = &airlockv1.IntegrationMCPTool{Name: item.Name, Description: item.Description, InputSchemaJson: item.InputSchema}
+		tools[i] = &airlockv1.IntegrationMCPTool{Name: item.Name, Description: item.Description, InputSchemaJson: item.InputSchema, OutputSchemaJson: item.OutputSchema}
 	}
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	writeProto(w, http.StatusOK, &airlockv1.ListIntegrationMCPToolsResponse{Tools: tools, Instructions: result.Instructions})
@@ -196,9 +196,14 @@ func (h *integrationsHandler) CallMCPTool(w http.ResponseWriter, r *http.Request
 	}
 	content := make([]*airlockv1.IntegrationMCPContent, len(result.Content))
 	for i, item := range result.Content {
-		content[i] = &airlockv1.IntegrationMCPContent{Type: item.Type, Text: item.Text, Uri: item.URI, Name: item.Name, MimeType: item.MimeType, Data: item.Data}
+		raw, err := json.Marshal(item)
+		if err != nil {
+			writeServiceError(w, err, "encode MCP content")
+			return
+		}
+		content[i] = &airlockv1.IntegrationMCPContent{Type: item.Type, Text: item.Text, Uri: item.URI, Name: item.Name, MimeType: item.MimeType, Data: item.Data, ContentJson: raw}
 	}
-	writeProto(w, http.StatusOK, &airlockv1.InvokeMCPToolResponse{Content: content, IsError: result.IsError})
+	writeProto(w, http.StatusOK, &airlockv1.InvokeMCPToolResponse{Content: content, IsError: result.IsError, StructuredContentJson: result.StructuredContent, MetaJson: result.Meta})
 }
 
 func integrationContextFromRequest(r *http.Request) (integrationContext, bool) {

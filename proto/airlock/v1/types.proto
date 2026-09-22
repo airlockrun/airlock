@@ -562,11 +562,11 @@ message TopicInfo {
   bool subscribed = 4;        // per-conversation subscription status
 }
 
-// SystemSettingsInfo mirrors the system_settings table (single-row, global).
-// Per-capability default models are used wherever the system picks a model
-// for a capability and no agent-specific override is set. Each slot pairs
-// a model name with a provider row UUID (multi-key support); empty + empty
-// means "no default configured for this capability".
+// SystemSettingsInfo mirrors the system_settings table (single-row, global),
+// including codegen budgets. Per-capability default models are used wherever
+// the system picks a model for a capability and no agent-specific override is
+// set. Each slot pairs a model name with a provider row UUID (multi-key
+// support); empty + empty means "no default configured for this capability".
 // public_url / agent_domain are deliberately absent: they are env-only
 // (PUBLIC_URL / AGENT_DOMAIN), shared with the bundled Caddy via .env, and
 // never DB/UI-editable.
@@ -592,6 +592,8 @@ message SystemSettingsInfo {
   reserved 17, 18, 19;
   reserved "telegram_manager_bot_configured", "telegram_manager_bot_username", "telegram_manager_bot_error";
   string ui_locale = 20;
+  int32 codegen_max_steps = 21;
+  int32 codegen_max_input_tokens = 22;
 }
 
 // ManagedBotSessionRequest creates a session row that correlates an

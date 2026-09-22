@@ -403,6 +403,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		r.Post("/host-enrollments/deny", hostsHandler.DenyEnrollment)
 		r.Get("/hosts", hostsHandler.List)
 		r.Get("/hosts/{hostID}", hostsHandler.Get)
+		r.Delete("/hosts/{hostID}", hostsHandler.Delete)
 		r.Post("/hosts/{hostID}/shell", hostsHandler.Shell)
 		r.Post("/hosts/{hostID}/connectors", hostsHandler.Install)
 		r.Get("/host-management-jobs/{jobID}", hostsHandler.GetJob)

@@ -1,17 +1,55 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
 
 // callMCPTool does a stateless MCP interaction: connect → initialize → tools/call → disconnect.
-func CallMCPTool(ctx context.Context, httpClient *http.Client, serverURL string, authInjection []byte, creds string, req wire.MCPToolCallRequest) (*wire.MCPToolCallResponse, error) {
+func CallMCPTool(ctx context.Context, httpClient *http.Client, serverURL string, authInjection []byte, creds string, req wire.MCPToolCallRequest) (out *wire.MCPToolCallResponse, callErr error) {
+	defer func() {
+		if creds == "" {
+			return
+		}
+		if callErr != nil {
+			callErr = &redactedMCPError{cause: callErr, message: strings.ReplaceAll(callErr.Error(), creds, "[REDACTED]")}
+		}
+		if out == nil {
+			return
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			out = nil
+			callErr = err
+			return
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			out = nil
+			callErr = err
+			return
+		}
+		value = redactMCPValue(value, creds)
+		raw, err = json.Marshal(value)
+		if err != nil {
+			out = nil
+			callErr = err
+			return
+		}
+		if err := json.Unmarshal(raw, out); err != nil {
+			out = nil
+			callErr = err
+		}
+	}()
 	connectURL, headers, err := applyMCPAuth(serverURL, authInjection, creds)
 	if err != nil {
 		return nil, err
@@ -48,6 +86,32 @@ func CallMCPTool(ctx context.Context, httpClient *http.Client, serverURL string,
 	return result, nil
 }
 
+type redactedMCPError struct {
+	cause   error
+	message string
+}
+
+func (e *redactedMCPError) Error() string { return e.message }
+func (e *redactedMCPError) Unwrap() error { return e.cause }
+
+func redactMCPValue(value any, secret string) any {
+	switch v := value.(type) {
+	case string:
+		return strings.ReplaceAll(v, secret, "[REDACTED]")
+	case []any:
+		for i := range v {
+			v[i] = redactMCPValue(v[i], secret)
+		}
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[strings.ReplaceAll(k, secret, "[REDACTED]")] = redactMCPValue(item, secret)
+		}
+		return out
+	}
+	return value
+}
+
 // DiscoverMCPTools connects to a remote MCP server and returns its tool
 // schemas plus the server-level `instructions` it advertised in the
 // initialize result (empty when the server set none).
@@ -68,9 +132,10 @@ func DiscoverMCPTools(ctx context.Context, httpClient *http.Client, serverURL st
 
 // mcpToolInfo is the internal representation of a discovered MCP tool.
 type McpToolInfo struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 // applyMCPAuth shapes (url, headers) for an outbound MCP HTTP call given the

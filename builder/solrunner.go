@@ -99,14 +99,14 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	if opts.IntegrationToken == "" || !opts.AgentID.Valid {
 		return nil, errors.New("codegen integration credentials are required")
 	}
+	q := dbq.New(b.db.Pool())
+	settings, sErr := q.GetSystemSettings(ctx)
+	if sErr != nil {
+		return nil, fmt.Errorf("load system settings: %w", sErr)
+	}
 	// Fall back to the system-wide default build model when no per-agent
 	// override has been set. Live inheritance — no snapshot at agent create.
 	if !opts.BuildProviderID.Valid || opts.BuildModel == "" {
-		q := dbq.New(b.db.Pool())
-		settings, sErr := q.GetSystemSettings(ctx)
-		if sErr != nil {
-			return nil, fmt.Errorf("load system settings: %w", sErr)
-		}
 		opts.BuildProviderID = settings.DefaultBuildProviderID
 		opts.BuildModel = settings.DefaultBuildModel
 	}
@@ -294,7 +294,7 @@ func (b *BuildService) runSolInProcess(ctx context.Context, opts solRunOpts) (*s
 	}
 
 	// Step 7: Create the agent-builder agent with all tools.
-	ag := newAgentBuilderAgent(toolSet, hasWebSearch)
+	ag := newAgentBuilderAgent(toolSet, hasWebSearch, int(settings.CodegenMaxSteps), int(settings.CodegenMaxInputTokens))
 	// sol parses Model as "provider/model" internally; reconstruct from
 	// the resolved row's catalog provider_id + the bare model name.
 	ag.Model = rp.CatalogID + "/" + opts.BuildModel

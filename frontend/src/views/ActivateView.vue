@@ -405,6 +405,8 @@ const defaults = ref<Defaults>({
   defaultSttModel: '', defaultTtsModel: '', defaultImageGenModel: '',
   defaultEmbeddingModel: '', defaultSearchModel: '',
 })
+const codegenMaxSteps = ref(400)
+const codegenMaxInputTokens = ref(40_000_000)
 
 async function loadExistingDefaults() {
   let info: SystemSettingsInfo | undefined
@@ -415,6 +417,8 @@ async function loadExistingDefaults() {
   } catch { /* best-effort */ }
   if (info) {
     if (availableLocales.includes(info.uiLocale)) setLocale(info.uiLocale)
+    codegenMaxSteps.value = info.codegenMaxSteps
+    codegenMaxInputTokens.value = info.codegenMaxInputTokens
     // Pack each (row UUID, model name) pair into the picker-shaped
     // string so the dropdowns pre-select the right entry. Empty pair
     // ⇒ empty string, picker shows the placeholder.
@@ -498,6 +502,8 @@ async function saveDefaults(): Promise<boolean> {
       defaultEmbeddingProviderId: embedding.providerRowID,
       defaultSearchModel:         search.modelName,
       defaultSearchProviderId:    search.providerRowID,
+      codegenMaxSteps:            codegenMaxSteps.value,
+      codegenMaxInputTokens:      codegenMaxInputTokens.value,
       uiLocale:                   uiLocale.value,
     }
     const req = toJson(UpdateSystemSettingsRequestSchema, {

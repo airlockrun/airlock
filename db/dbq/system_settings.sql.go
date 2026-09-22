@@ -43,7 +43,7 @@ func (q *Queries) GetPublicSystemStatus(ctx context.Context) (GetPublicSystemSta
 }
 
 const getSystemSettings = `-- name: GetSystemSettings :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale, codegen_max_steps, codegen_max_input_tokens FROM system_settings WHERE id = true
 `
 
 func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) {
@@ -72,12 +72,14 @@ func (q *Queries) GetSystemSettings(ctx context.Context) (SystemSetting, error) 
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
 		&i.UiLocale,
+		&i.CodegenMaxSteps,
+		&i.CodegenMaxInputTokens,
 	)
 	return i, err
 }
 
 const getSystemSettingsForActivation = `-- name: GetSystemSettingsForActivation :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true FOR UPDATE
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale, codegen_max_steps, codegen_max_input_tokens FROM system_settings WHERE id = true FOR UPDATE
 `
 
 // Serializes first-admin activation across replicas.
@@ -107,12 +109,14 @@ func (q *Queries) GetSystemSettingsForActivation(ctx context.Context) (SystemSet
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
 		&i.UiLocale,
+		&i.CodegenMaxSteps,
+		&i.CodegenMaxInputTokens,
 	)
 	return i, err
 }
 
 const getSystemSettingsForUpdate = `-- name: GetSystemSettingsForUpdate :one
-SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale FROM system_settings WHERE id = true FOR UPDATE
+SELECT id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale, codegen_max_steps, codegen_max_input_tokens FROM system_settings WHERE id = true FOR UPDATE
 `
 
 // Serializes whole-row settings updates across replicas.
@@ -142,6 +146,8 @@ func (q *Queries) GetSystemSettingsForUpdate(ctx context.Context) (SystemSetting
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
 		&i.UiLocale,
+		&i.CodegenMaxSteps,
+		&i.CodegenMaxInputTokens,
 	)
 	return i, err
 }
@@ -194,10 +200,12 @@ SET default_build_provider_id     = $1,
     default_embedding_model       = $14,
     default_search_provider_id    = $15,
     default_search_model          = $16,
-    ui_locale                     = $17,
+    codegen_max_steps             = $17,
+    codegen_max_input_tokens      = $18,
+    ui_locale                     = $19,
     updated_at = now()
 WHERE id = true
-RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale
+RETURNING id, default_build_provider_id, default_build_model, default_exec_provider_id, default_exec_model, default_stt_provider_id, default_stt_model, default_vision_provider_id, default_vision_model, default_tts_provider_id, default_tts_model, default_image_gen_provider_id, default_image_gen_model, default_embedding_provider_id, default_embedding_model, default_search_provider_id, default_search_model, activation_code, created_at, updated_at, last_seen_sdk_version, ui_locale, codegen_max_steps, codegen_max_input_tokens
 `
 
 type UpdateSystemSettingsParams struct {
@@ -217,6 +225,8 @@ type UpdateSystemSettingsParams struct {
 	DefaultEmbeddingModel      string      `json:"default_embedding_model"`
 	DefaultSearchProviderID    pgtype.UUID `json:"default_search_provider_id"`
 	DefaultSearchModel         string      `json:"default_search_model"`
+	CodegenMaxSteps            int32       `json:"codegen_max_steps"`
+	CodegenMaxInputTokens      int32       `json:"codegen_max_input_tokens"`
 	UiLocale                   string      `json:"ui_locale"`
 }
 
@@ -240,6 +250,8 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		arg.DefaultEmbeddingModel,
 		arg.DefaultSearchProviderID,
 		arg.DefaultSearchModel,
+		arg.CodegenMaxSteps,
+		arg.CodegenMaxInputTokens,
 		arg.UiLocale,
 	)
 	var i SystemSetting
@@ -266,6 +278,8 @@ func (q *Queries) UpdateSystemSettings(ctx context.Context, arg UpdateSystemSett
 		&i.UpdatedAt,
 		&i.LastSeenSdkVersion,
 		&i.UiLocale,
+		&i.CodegenMaxSteps,
+		&i.CodegenMaxInputTokens,
 	)
 	return i, err
 }
