@@ -66,10 +66,14 @@ func connectMCPHTTP(ctx context.Context, client *http.Client, serverURL string, 
 	}
 	c.instructions = initialized.Instructions
 	if initialized.ProtocolVersion != "" {
-		if !supportedMCPProtocolVersion(initialized.ProtocolVersion) {
-			return nil, fmt.Errorf("server's protocol version is not supported: %s", initialized.ProtocolVersion)
+		if supportedMCPProtocolVersion(initialized.ProtocolVersion) {
+			c.protocolVersion = initialized.ProtocolVersion
 		}
-		c.protocolVersion = initialized.ProtocolVersion
+		// airlock-admin fork: tolerate a server advertising a NEWER protocol
+		// revision than this client's pinned list (gptadmin hub answers
+		// 2026-07-28). Keep speaking our own pinned version over the legacy
+		// request path instead of failing the connection; only an UNKNOWN
+		// OLDER version would still be rejected by the empty-check above.
 	}
 	if _, err := c.send(ctx, "notifications/initialized", nil); err != nil {
 		return nil, fmt.Errorf("initialized notification failed: %w", err)
@@ -237,7 +241,9 @@ func (c *McpHTTPClient) send(ctx context.Context, method string, params any) (js
 		c.sessionID = sessionID
 	}
 	if notification {
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		// airlock-admin fork: 204 No Content is a legal success answer to a
+		// JSON-RPC notification over streamable HTTP (gptadmin hub uses it).
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNoContent {
 			return nil, mcpHTTPStatusError(resp)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
